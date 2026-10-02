@@ -12,6 +12,19 @@ val keystoreProperties = Properties()
 if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
+val releaseKeystoreFile = rootProject.file(
+    System.getenv("ANDROID_KEYSTORE_PATH")
+        ?: keystoreProperties.getProperty("storeFile")
+        ?: "app/wasalny-release.jks"
+)
+val releaseStorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+    ?: keystoreProperties.getProperty("storePassword")
+val releaseKeyAlias = System.getenv("ANDROID_KEY_ALIAS")
+    ?: keystoreProperties.getProperty("keyAlias")
+val releaseKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+    ?: keystoreProperties.getProperty("keyPassword")
+val releaseSigningConfigured = releaseKeystoreFile.exists() &&
+    releaseStorePassword != null && releaseKeyAlias != null && releaseKeyPassword != null
 
 android {
     namespace = "com.wasalny.sidisalem"
@@ -26,20 +39,14 @@ android {
 
     }
 
-    // Release signing is intentionally configured only from the local/CI
-    // keystore.properties file. Never keep passwords or keystores in Git.
-    if (keystorePropertiesFile.exists()) {
+    // Signing values come from environment variables in CI or local properties.
+    if (releaseSigningConfigured) {
         signingConfigs {
             create("release") {
-                val storeFilePath = keystoreProperties.getProperty("storeFile")
-                    ?: error("storeFile is required in keystore.properties")
-                storeFile = rootProject.file(storeFilePath)
-                storePassword = keystoreProperties.getProperty("storePassword")
-                    ?: error("storePassword is required in keystore.properties")
-                keyAlias = keystoreProperties.getProperty("keyAlias")
-                    ?: error("keyAlias is required in keystore.properties")
-                keyPassword = keystoreProperties.getProperty("keyPassword")
-                    ?: error("keyPassword is required in keystore.properties")
+                storeFile = releaseKeystoreFile
+                storePassword = requireNotNull(releaseStorePassword)
+                keyAlias = requireNotNull(releaseKeyAlias)
+                keyPassword = requireNotNull(releaseKeyPassword)
             }
         }
     }
@@ -47,7 +54,7 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            if (keystorePropertiesFile.exists()) {
+            if (releaseSigningConfigured) {
                 signingConfig = signingConfigs.getByName("release")
             }
             proguardFiles(

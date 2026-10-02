@@ -24,6 +24,9 @@ functions/lib/
 *.keystore
 *.p12
 *.pem
+/app/wasalny-release.jks
+/wasalny_base64.txt
+/tmp/
 # Firebase Admin - private key - do NOT upload
 *adminsdk*.json
 *wasalny-app*.json
