@@ -1,4 +1,4 @@
-name: Build Wasalny Release
+name: Build Wasalny Debug APK
 
 on:
   push:
@@ -63,46 +63,13 @@ jobs:
               raise SystemExit("google-services.json does not match the Wasalny Firebase project and package.")
           PY
 
-      - name: Configure release signing
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        id: signing
-        run: |
-          set -euo pipefail
-          if [[ -z "$ANDROID_KEYSTORE_BASE64" ]]; then
-            echo "has_keystore=false" >> "$GITHUB_OUTPUT"
-            echo "Release signing secret is absent; skipping release build."
-            exit 0
-          fi
-          for secret_name in ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
-            if [[ -z "${!secret_name}" ]]; then
-              echo "::error::Required GitHub Actions secret ${secret_name} is missing."
-              exit 1
-            fi
-          done
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > app/wasalny-release.jks
-          chmod 600 app/wasalny-release.jks
-          echo "has_keystore=true" >> "$GITHUB_OUTPUT"
-
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        run: ./gradlew assembleDebug --no-daemon
 
-      - name: Build signed Release APK and bundle
-        if: steps.signing.outputs.has_keystore == 'true'
-        env:
-          ANDROID_KEYSTORE_PATH: app/wasalny-release.jks
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: ./gradlew assembleRelease bundleRelease --no-daemon --stacktrace
-
-      - name: Upload APK artifacts
+      - name: Upload Debug APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wasalny-apks
-          path: app/build/outputs/apk/**/*.apk
+          name: wasalny-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
