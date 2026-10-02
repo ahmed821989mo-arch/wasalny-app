@@ -108,11 +108,7 @@ service cloud.firestore {
               'displayName', 'available', 'lat', 'lon', 'geohash', 'updatedAt'
             ])
             && request.resource.data.available is bool
-            && (!request.resource.data.available
-              || ((resource.data.subscriptionExpiresAt is timestamp
-                  && resource.data.subscriptionExpiresAt > request.time)
-                || (resource.data.subscriptionExpiresAt is int
-                  && resource.data.subscriptionExpiresAt > request.time.toMillis())))
+            && request.resource.data.available == false
             && validCoordinates(request.resource.data.lat, request.resource.data.lon)
             && request.resource.data.geohash is string
             && request.resource.data.updatedAt == request.time

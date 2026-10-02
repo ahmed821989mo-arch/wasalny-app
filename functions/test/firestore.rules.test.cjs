@@ -138,6 +138,20 @@ test("passengers cannot approve drivers or read unrelated rides", async () => {
   await assertFails(getDoc(doc(otherDriverDb, "rides/ride-1")));
 });
 
+test("drivers cannot set themselves available with direct writes", async () => {
+  await testEnvironment.withSecurityRulesDisabled(async context => {
+    await updateDoc(doc(context.firestore(), "drivers/driver-1"), {
+      approved: true,
+      subscriptionExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
+    });
+  });
+  const db = testEnvironment.authenticatedContext("driver-1").firestore();
+  await assertFails(updateDoc(doc(db, "drivers/driver-1"), {
+    available: true,
+    updatedAt: serverTimestamp()
+  }));
+});
+
 test("clients cannot accept offers by writing ride state directly", async () => {
   const db = testEnvironment.authenticatedContext("passenger-1").firestore();
   await assertFails(updateDoc(doc(db, "rides/ride-1"), {

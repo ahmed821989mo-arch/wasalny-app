@@ -3,7 +3,7 @@
 ## إعداد المشروع
 
 1. استخدم مشروع Firebase المحدد في `.firebaserc`، وأضف تطبيق Android بمعرّف الحزمة `com.wasalny.sidisalem`.
-2. نزّل `google-services.json` وضعه محلياً في `app/`؛ الملف مستثنى من Git. في GitHub خزّن محتواه Base64 في السر `GOOGLE_SERVICES_JSON`. عند غياب السر يستخدم CI إعداداً مؤقتاً للبناء فقط، ولن يتصل APK الناتج بمشروع Firebase.
+2. `app/google-services.json` الحالي إعداد عميل Firebase عام ومتتبع في المستودع كي ينجح البناء من checkout نظيف. تحقق من تطابق مشروعه مع `.firebaserc` والحزمة `com.wasalny.sidisalem`. لا تضع بيانات اعتماد Admin SDK أو مفاتيح خدمة في التطبيق؛ يمكن تقييد مفتاح API من Google Cloud. يدعم workflow التحقق استبدال الملف بسر اختياري `GOOGLE_SERVICES_JSON` بصيغة Base64.
 3. من **Authentication → Sign-in method** فعّل **Phone**، وأضف بصمات SHA-1 وSHA-256 لتطبيق Android حتى يعمل تحقق SMS.
 4. أنشئ **Firestore Database**، ثم انشر القواعد والفهارس وCloud Functions من جذر المشروع:
 
@@ -30,17 +30,17 @@ firebase deploy --only firestore:rules,firestore:indexes,storage,functions
 
 ## حساب المشرف
 
-1. افتح التطبيق ثم ادخل إلى «حسابي» واضغط «دخول المشرف».
-2. اكتب رقم المشرف، ثم أدخل كود SMS الذي يرسله Firebase.
-3. من Firebase Console افتح حساب المشرف في **Authentication → Users** وانسخ `UID`.
-4. أنشئ وثيقة `admins/{UID}` في Firestore بالحقول التالية:
+1. من Firebase Console افتح حساب المشرف في **Authentication → Users** وانسخ `UID`.
+2. أنشئ وثيقة `admins/{UID}` في Firestore بالحقول التالية من Firebase Console أو Admin SDK موثوق:
 
 ```text
 role: "admin"
 active: true
 ```
 
-بعد ذلك أعد تسجيل الدخول من شاشة المشرف. الحسابات التي لا تملك هذه الوثيقة لن تدخل لوحة الإدارة، حتى لو عرفت مكان الشاشة المخفية.
+3. افتح رابط الإدارة المنفصل `wasalny://admin` على جهاز عليه التطبيق، ثم وثّق رقم الهاتف بكود SMS.
+
+التحقق يجمع بين Firebase Authentication وUID ووثيقة الإدارة النشطة. Cloud Functions وقواعد Firestore/Storage تعيد فرض صلاحية المشرف خادميًا؛ إخفاء المسار ليس حدًا أمنيًا. لا تستخدم كودًا سريًا ثابتًا داخل APK، لأنه قابل للاستخراج ولا يغني عن تفويض UID.
 
 رقم الهاتف لا يُضمّن في APK. يُحفظ ضمن ملف الحساب، ولا يُتاح رقم الراكب للسائق إلا بعد اختياره لرحلته. خدمة الموقع الأمامية تعمل أثناء فتح شاشة طلبات السائق، وتتوقف عند مغادرتها ويُعلّم التطبيق السائق غير متاح.
 

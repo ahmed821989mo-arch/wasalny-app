@@ -42,6 +42,9 @@ import androidx.core.content.ContextCompat
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation.NavController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -77,6 +80,9 @@ import kotlin.math.*
 val Context.dataStore by preferencesDataStore(name = "wasalny_v5")
 private const val TERMS_VERSION = "2026-09-30-v1"
 private fun termsAcceptedKey(uid: String) = stringPreferencesKey("terms_accepted_version_$uid")
+private fun roleKey(uid: String) = stringPreferencesKey("role_$uid")
+private fun userNameKey(uid: String) = stringPreferencesKey("user_name_$uid")
+private fun userPhoneKey(uid: String) = stringPreferencesKey("user_phone_$uid")
 private fun driverApplicationDraftKey(uid: String, imageType: String) =
     stringPreferencesKey("driver_application_${uid}_$imageType")
 
@@ -147,11 +153,21 @@ suspend fun deleteFav(context: Context, name: String) {
     context.dataStore.edit { it[stringPreferencesKey("favs")] = next.toString() }
 }
 
-suspend fun getUserName(context: Context): String =
-    context.dataStore.data.first()[stringPreferencesKey("user_name")] ?: "مستخدم"
+suspend fun getUserName(context: Context): String {
+    val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return "مستخدم"
+    context.dataStore.data.first()[userNameKey(uid)]?.takeIf { it.isNotBlank() }?.let { return it }
+    val name = runCatching { FirebaseRidesRepository().getUserProfile(uid)?.name }.getOrNull()
+    if (!name.isNullOrBlank()) context.dataStore.edit { it[userNameKey(uid)] = name }
+    return name?.takeIf { it.isNotBlank() } ?: "مستخدم"
+}
 
-suspend fun getUserPhone(context: Context): String =
-    context.dataStore.data.first()[stringPreferencesKey("user_phone")] ?: ""
+suspend fun getUserPhone(context: Context): String {
+    val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return ""
+    context.dataStore.data.first()[userPhoneKey(uid)]?.takeIf { it.isNotBlank() }?.let { return it }
+    val phone = runCatching { FirebaseRidesRepository().getUserProfile(uid)?.phone }.getOrNull()
+    if (!phone.isNullOrBlank()) context.dataStore.edit { it[userPhoneKey(uid)] = phone }
+    return phone?.takeIf { it.isNotBlank() }.orEmpty()
+}
 
 class MainActivity : ComponentActivity() {
     private val notificationRideId = mutableStateOf<String?>(null)
@@ -208,6 +224,7 @@ fun AppV4(notificationRideId: String? = null, adminEntryRequested: Boolean = fal
     val scope = rememberCoroutineScope()
     var firebaseUser by remember { mutableStateOf(FirebaseAuth.getInstance().currentUser) }
     var role by remember { mutableStateOf<String?>(null) }
+    var roleLoadedForUid by remember { mutableStateOf<String?>(null) }
     var showDriverRegistration by remember { mutableStateOf(false) }
     var showCustomerProfile by remember { mutableStateOf(false) }
     var showAdminLogin by remember { mutableStateOf(adminEntryRequested) }
@@ -276,14 +293,30 @@ fun AppV4(notificationRideId: String? = null, adminEntryRequested: Boolean = fal
         onDispose { registration.remove() }
     }
 
-    LaunchedEffect(firebaseUser?.uid, role) {
-        val uid = firebaseUser?.uid ?: return@LaunchedEffect
+    LaunchedEffect(firebaseUser?.uid) {
+        val uid = firebaseUser?.uid
+        role = null
+        roleLoadedForUid = null
+        driverApproved = null
+        if (uid == null) return@LaunchedEffect
         runCatching {
             val token = FirebaseMessaging.getInstance().token.await()
             FirebaseRidesRepository().saveFcmToken(uid, token)
         }
         val prefs = context.dataStore.data.first()
-        if (role == null) role = prefs[stringPreferencesKey("role")]
+        role = prefs[roleKey(uid)]?.takeIf { it == "customer" || it == "driver" }
+        if (role == null) {
+            val profile = runCatching { FirebaseRidesRepository().getUserProfile(uid) }.getOrNull()
+            role = profile?.takeIf { it.name.isNotBlank() }?.role?.takeIf { it == "customer" || it == "driver" }
+            if (role != null) context.dataStore.edit { it[roleKey(uid)] = role!! }
+            profile?.name?.takeIf { it.isNotBlank() }?.let { name ->
+                context.dataStore.edit { it[userNameKey(uid)] = name }
+            }
+            profile?.phone?.takeIf { it.isNotBlank() }?.let { phone ->
+                context.dataStore.edit { it[userPhoneKey(uid)] = phone }
+            }
+        }
+        roleLoadedForUid = uid
         if (role == "driver") {
             val repository = FirebaseRidesRepository()
             driverApproved = repository.getDriverApproval(uid) ?: false
@@ -331,6 +364,8 @@ fun AppV4(notificationRideId: String? = null, adminEntryRequested: Boolean = fal
             )
             firebaseUser == null -> PhoneAuthScreen { firebaseUser = FirebaseAuth.getInstance().currentUser }
             !termsLoaded -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            roleLoadedForUid != firebaseUser?.uid -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            role == "driver" && driverApproved == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             !termsAccepted -> TermsAndConditionsScreen(onAccept = {
                 val uid = firebaseUser?.uid
                 if (uid != null) {
@@ -359,7 +394,7 @@ fun AppV4(notificationRideId: String? = null, adminEntryRequested: Boolean = fal
                 adminMessage = driverAdminMessage,
                 onUpdateData = { showDriverRegistration = true },
                 onLogout = {
-                    scope.launch { context.dataStore.edit { it.remove(stringPreferencesKey("role")) } }
+                    firebaseUser?.uid?.let { uid -> scope.launch { context.dataStore.edit { it.remove(roleKey(uid)) } } }
                     FirebaseAuth.getInstance().signOut(); role = null; driverApproved = null; driverPhone = ""
                 }
             )
@@ -452,7 +487,9 @@ fun WelcomeV4(onSelect: (String) -> Unit) {
                         icon = "🛺",
                         onClick = {
                             scope.launch {
-                                ctx.dataStore.edit { it[stringPreferencesKey("role")] = "customer" }
+                                FirebaseAuth.getInstance().currentUser?.uid?.let { uid ->
+                                    ctx.dataStore.edit { it[roleKey(uid)] = "customer" }
+                                }
                                 onSelect("customer")
                             }
                         },
@@ -692,6 +729,7 @@ fun DriverRegistrationScreen(
             uploadProgress = uploadProgress - imageType
             path
         } catch (exception: Exception) {
+            uploadProgress = uploadProgress - imageType
             throw IllegalStateException("فشل رفع $label. أعد المحاولة؛ بقية بيانات التسجيل محفوظة.", exception)
         }
     }
@@ -834,9 +872,12 @@ fun DriverRegistrationScreen(
                             val safeName = name.trim()
                             val safeLicenseType = licenseType.trim().ifBlank { "مرخص" }
                             idCardPath = uploadImageIfNeeded(uid, "id-card", idCardImage, idCardPath)
+                            idCardImage = null
                             vehiclePath = uploadImageIfNeeded(uid, "vehicle", vehicleImage, vehiclePath)
+                            vehicleImage = null
                             if (profileImage != null || profilePath.isNotBlank()) {
                                 profilePath = uploadImageIfNeeded(uid, "profile", profileImage, profilePath)
+                                profileImage = null
                             }
                             repository.saveDriverApplication(
                                 uid = uid,
@@ -850,9 +891,9 @@ fun DriverRegistrationScreen(
                             )
                             repository.saveUserProfile(uid, "driver", safeName, safePhone)
                             context.dataStore.edit {
-                                it[stringPreferencesKey("role")] = "driver"
-                                it[stringPreferencesKey("user_name")] = safeName
-                                it[stringPreferencesKey("user_phone")] = safePhone
+                                it[roleKey(uid)] = "driver"
+                                it[userNameKey(uid)] = safeName
+                                it[userPhoneKey(uid)] = safePhone
                                 it.remove(driverApplicationDraftKey(uid, "id-card"))
                                 it.remove(driverApplicationDraftKey(uid, "vehicle"))
                                 it.remove(driverApplicationDraftKey(uid, "profile"))
@@ -1233,6 +1274,17 @@ fun MapV4(
                     ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_COARSE_LOCATION) ==
                     PackageManager.PERMISSION_GRANTED
         )
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                hasLocationPermission = ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                        ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -1617,7 +1669,8 @@ fun AccountV4(onRoleChanged: () -> Unit) {
     var subscription by remember { mutableStateOf<DriverSubscription?>(null) }
 
     LaunchedEffect(Unit) {
-        role = ctx.dataStore.data.first()[stringPreferencesKey("role")] ?: "customer"
+        val uid = FirebaseAuth.getInstance().currentUser?.uid
+        role = uid?.let { ctx.dataStore.data.first()[roleKey(it)] } ?: "customer"
         name = getUserName(ctx)
         phone = FirebaseAuth.getInstance().currentUser?.phoneNumber ?: getUserPhone(ctx)
         if (name == "مستخدم") name = ""
@@ -1675,8 +1728,10 @@ fun AccountV4(onRoleChanged: () -> Unit) {
             onClick = {
                 scope.launch {
                     ctx.dataStore.edit {
-                        it[stringPreferencesKey("user_name")] = name.ifBlank { "مستخدم" }
-                        it[stringPreferencesKey("user_phone")] = phone
+                        FirebaseAuth.getInstance().currentUser?.uid?.let { uid ->
+                            it[userNameKey(uid)] = name.ifBlank { "مستخدم" }
+                            it[userPhoneKey(uid)] = phone
+                        }
                     }
                     saved = true
                 }
@@ -1724,8 +1779,8 @@ fun AccountV4(onRoleChanged: () -> Unit) {
         OutlinedButton(
             onClick = {
                 scope.launch {
-                    ctx.dataStore.edit {
-                        it.remove(stringPreferencesKey("role"))
+                    FirebaseAuth.getInstance().currentUser?.uid?.let { uid ->
+                        ctx.dataStore.edit { it.remove(roleKey(uid)) }
                     }
                     onRoleChanged()
                 }

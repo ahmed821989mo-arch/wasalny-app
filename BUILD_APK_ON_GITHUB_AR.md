@@ -7,10 +7,9 @@
 
 ## 2) إعداد Firebase
 - فعّل Phone Authentication وأنشئ Firestore، ثم انشر القواعد والفهارس وCloud Functions حسب [FIRESTORE_SETUP_AR.md](FIRESTORE_SETUP_AR.md).
-- لا ترفع `app/google-services.json` إلى Git. أنشئ GitHub Secret باسم `GOOGLE_SERVICES_JSON` وضع فيه محتوى الملف بصيغة Base64؛ على Linux يمكنك توليده باستخدام `base64 -w0 app/google-services.json`.
-- إذا لم يُضبط السر، سيستخدم workflow ملف Firebase مؤقتًا ليكتمل البناء فقط؛ الـ APK الناتج لن يتصل بمشروعك.
+- ملف `app/google-services.json` الحالي إعداد عميل Firebase عام وموجود في المستودع ليعمل البناء من checkout نظيف؛ لا يحتوي بيانات اعتماد Admin SDK أو مفتاح خدمة. قيّد مفتاح API من Google Cloud حسب التطبيقات وواجهات API المستخدمة.
+- يستخدم workflow بناء APK الملف المتتبع مباشرة. يستطيع workflow التحقق استبداله بسر GitHub اختياري باسم `GOOGLE_SERVICES_JSON` يحتوي JSON بصيغة Base64؛ على Linux يمكن توليده باستخدام `base64 -w0 app/google-services.json`.
 - يستخدم عرض الخرائط OpenStreetMap ولا يحتاج مفتاح Google Maps؛ يلزم إنترنت لتحميل البلاطات.
-- يلزم اتصال إنترنت لتحميل بلاطات الخريطة.
 
 ## 3) تشغيل البناء
 من GitHub:
@@ -27,4 +26,4 @@ Actions → افتح آخر تشغيل ناجح → Artifacts → `Wasalny-APK`
 ## ملاحظات
 - هذه نسخة Debug للتجربة.
 - `minSdk 24`، أي Android 7 أو أحدث.
-- الـ workflow يستخدم JDK 17 وGradle Wrapper 8.7 وAndroid SDK.
+- الـ workflow يستخدم JDK 21 وGradle Wrapper 8.7 وAndroid SDK.

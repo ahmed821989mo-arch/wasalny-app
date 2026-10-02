@@ -194,9 +194,9 @@ fun CustomerProfileScreen(onComplete: (String) -> Unit, onBack: () -> Unit) {
                             try {
                                 repo.saveUserProfile(id, "customer", name.trim(), phone)
                                 context.dataStore.edit {
-                                    it[androidx.datastore.preferences.core.stringPreferencesKey("role")] = "customer"
-                                    it[androidx.datastore.preferences.core.stringPreferencesKey("user_name")] = name.trim()
-                                    it[androidx.datastore.preferences.core.stringPreferencesKey("user_phone")] = phone
+                                    it[androidx.datastore.preferences.core.stringPreferencesKey("role_$id")] = "customer"
+                                    it[androidx.datastore.preferences.core.stringPreferencesKey("user_name_$id")] = name.trim()
+                                    it[androidx.datastore.preferences.core.stringPreferencesKey("user_phone_$id")] = phone
                                 }
                                 onComplete("customer")
                             } catch (e: Exception) { error = e.toUserMessage("تعذر حفظ البيانات") }

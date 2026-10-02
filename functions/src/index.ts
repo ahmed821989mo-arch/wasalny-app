@@ -12,6 +12,7 @@ initializeApp();
 const db = getFirestore();
 const radii = [500, 1000, 2000, 5000];
 const waitMs = 12000;
+const activeRideStatuses = ["accepted", "driver_arriving", "driver_arrived", "in_progress"];
 
 function requireAuth(request: any): string {
   const uid = request.auth?.uid;
@@ -801,4 +802,43 @@ export const heartbeatDriver = onCall({ region: "us-central1" }, async request =
   }
   await ref.update({ lat, lon, geohash: geohashForLocation([lat, lon]), updatedAt: FieldValue.serverTimestamp() });
   return { available: true };
+});
+
+export const setDriverAvailability = onCall({ region: "us-central1" }, async request => {
+  const uid = requireAuth(request);
+  const available = request.data?.available;
+  if (typeof available !== "boolean") {
+    throw new HttpsError("invalid-argument", "حالة التوفر غير صالحة");
+  }
+
+  const driverRef = db.collection("drivers").doc(uid);
+  return db.runTransaction(async tx => {
+    const driver = await tx.get(driverRef);
+    if (!driver.exists || driver.get("approved") !== true) {
+      throw new HttpsError("permission-denied", "السائق غير معتمد");
+    }
+
+    if (!available) {
+      tx.update(driverRef, { available: false, updatedAt: FieldValue.serverTimestamp() });
+      return { available: false };
+    }
+
+    const expiry = driver.get("subscriptionExpiresAt");
+    const expiryMillis = expiry?.toMillis?.()
+      ?? (typeof expiry === "number" ? expiry : 0);
+    if (expiryMillis <= Date.now()) {
+      throw new HttpsError("failed-precondition", "الاشتراك غير نشط");
+    }
+
+    const activeRides = await tx.get(db.collection("rides")
+      .where("selectedDriverId", "==", uid)
+      .where("status", "in", activeRideStatuses)
+      .limit(1));
+    if (!activeRides.empty) {
+      throw new HttpsError("failed-precondition", "أنه الرحلة الحالية قبل استقبال رحلات جديدة");
+    }
+
+    tx.update(driverRef, { available: true, updatedAt: FieldValue.serverTimestamp() });
+    return { available: true };
+  });
 });

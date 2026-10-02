@@ -147,6 +147,7 @@ data class CustomerStats(
 }
 
 data class RatingRecord(val id: String, val rideId: String, val raterId: String, val stars: Int, val comment: String)
+data class UserProfile(val role: String, val name: String, val phone: String)
 
 class FirebaseRidesRepository(
     private val db: FirebaseFirestore = FirebaseFirestore.getInstance(),
@@ -183,6 +184,17 @@ class FirebaseRidesRepository(
             mapOf("uid" to uid, "role" to role, "name" to name, "phone" to phone, "updatedAt" to FieldValue.serverTimestamp()),
             SetOptions.merge()
         ).await()
+    }
+
+    suspend fun getUserProfile(uid: String): UserProfile? {
+        check(FirebaseAuth.getInstance().currentUser?.uid == uid) { "غير مصرح" }
+        val snapshot = db.collection("users").document(uid).get().await()
+        if (!snapshot.exists()) return null
+        return UserProfile(
+            role = snapshot.getString("role") ?: "",
+            name = snapshot.getString("name") ?: "",
+            phone = snapshot.getString("phone") ?: ""
+        )
     }
 
     suspend fun saveFcmToken(uid: String, token: String) {
@@ -330,13 +342,10 @@ class FirebaseRidesRepository(
     }
 
     suspend fun setDriverAvailability(uid: String, available: Boolean) {
-        val ref = drivers.document(uid)
-        val snapshot = ref.get().await()
-        check(snapshot.getBoolean("approved") == true) { "السائق غير معتمد" }
-        if (available) check(getDriverSubscription(uid).active) {
-            "الاشتراك غير نشط. حوّل رسوم الاشتراك عبر فودافون كاش على 01069631950."
-        }
-        ref.update("available", available, "updatedAt", FieldValue.serverTimestamp()).await()
+        check(FirebaseAuth.getInstance().currentUser?.uid == uid) { "غير مصرح" }
+        functions.getHttpsCallable("setDriverAvailability")
+            .call(mapOf("available" to available))
+            .await()
     }
 
     suspend fun publishDriverLocation(uid: String, name: String, point: Coordinate): Boolean {
