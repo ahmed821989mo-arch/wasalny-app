@@ -36,7 +36,14 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -n "$GOOGLE_SERVICES_JSON" ]]; then
-            printf '%s' "$GOOGLE_SERVICES_JSON" | base64 --decode > app/google-services.json
+            decoded_json="$(mktemp)"
+            if printf '%s' "$GOOGLE_SERVICES_JSON" | base64 --decode > "$decoded_json" 2>/dev/null && \
+              python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$decoded_json" >/dev/null 2>&1; then
+              cp "$decoded_json" app/google-services.json
+            else
+              printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+            fi
+            rm -f "$decoded_json"
           fi
           test -s app/google-services.json || {
             echo "::error::Provide GOOGLE_SERVICES_JSON as Base64 or commit app/google-services.json."
