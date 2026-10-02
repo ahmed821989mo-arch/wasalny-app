@@ -219,6 +219,14 @@ fun AppV4(notificationRideId: String? = null, adminEntryRequested: Boolean = fal
     var termsLoaded by remember { mutableStateOf(false) }
     var openedNotificationRideId by remember { mutableStateOf<String?>(null) }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    val leaveDriverMode: () -> Unit = {
+        if (role == "driver") {
+            context.stopService(Intent(context, DriverLocationService::class.java))
+            firebaseUser?.uid?.let { uid ->
+                scope.launch { runCatching { FirebaseRidesRepository().markDriverOffline(uid) } }
+            }
+        }
+    }
 
     LaunchedEffect(firebaseUser?.uid) {
         termsLoaded = false
@@ -266,14 +274,6 @@ fun AppV4(notificationRideId: String? = null, adminEntryRequested: Boolean = fal
             { error -> android.util.Log.w("WasalnyDriver", "تعذر تحديث حالة طلب السائق", error) }
         )
         onDispose { registration.remove() }
-    }
-
-    fun leaveDriverMode() {
-        if (role != "driver") return
-        context.stopService(Intent(context, DriverLocationService::class.java))
-        firebaseUser?.uid?.let { uid ->
-            scope.launch { runCatching { FirebaseRidesRepository().markDriverOffline(uid) } }
-        }
     }
 
     LaunchedEffect(firebaseUser?.uid, role) {
