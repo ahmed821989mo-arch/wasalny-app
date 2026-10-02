@@ -304,18 +304,23 @@ export const selectRideOffer = onCall({ region: "us-central1" }, async request =
   });
 });
 
-async function validateDriverApplicationImage(path: string) {
-  let metadata: any;
-  try {
-    [metadata] = await getStorage().bucket().file(path).getMetadata();
-  } catch {
-    throw new HttpsError("failed-precondition", "تعذر العثور على أحد المستندات. أعد رفع الصور المطلوبة.");
+const maxDriverImageBytes = 190 * 1024;
+
+function validateDriverImageBase64(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length === 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+    throw new HttpsError("invalid-argument", `صورة ${label} غير صالحة.`);
   }
-  const size = Number(metadata.size ?? 0);
-  if (!/^image\/(jpeg|png|webp)$/.test(String(metadata.contentType ?? ""))
-    || size <= 0 || size > 5 * 1024 * 1024) {
-    throw new HttpsError("invalid-argument", "المستندات يجب أن تكون JPG أو PNG أو WEBP وبحد أقصى 5 ميجابايت للصورة.");
+  const bytes = Buffer.from(value, "base64");
+  if (bytes.length === 0 || bytes.length > maxDriverImageBytes || bytes.toString("base64") !== value) {
+    throw new HttpsError("invalid-argument", `صورة ${label} تتجاوز الحجم المسموح أو غير صالحة.`);
   }
+  const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  const isPng = bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  const isWebp = bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP";
+  if (!isJpeg && !isPng && !isWebp) {
+    throw new HttpsError("invalid-argument", `صيغة صورة ${label} غير مدعومة.`);
+  }
+  return value;
 }
 
 export const submitDriverApplication = onCall({ region: "us-central1" }, async request => {
@@ -324,12 +329,11 @@ export const submitDriverApplication = onCall({ region: "us-central1" }, async r
   const phone = String(request.data?.phone ?? "").trim();
   const licenseType = String(request.data?.licenseType ?? "").trim();
   const vehicleType = String(request.data?.vehicleType ?? "");
-  const idCardImagePath = String(request.data?.idCardImagePath ?? "");
-  const vehicleImagePath = String(request.data?.vehicleImagePath ?? "");
-  const profileImagePath = String(request.data?.profileImagePath ?? "");
-  const expectedIdPath = `driverApplications/${uid}/id-card`;
-  const expectedVehiclePath = `driverApplications/${uid}/vehicle`;
-  const expectedProfilePath = `driverApplications/${uid}/profile`;
+  const idCardBase64 = validateDriverImageBase64(request.data?.idCardBase64, "البطاقة");
+  const vehicleBase64 = validateDriverImageBase64(request.data?.vehicleBase64, "المركبة");
+  const profileBase64 = request.data?.profileBase64
+    ? validateDriverImageBase64(request.data.profileBase64, "الصورة الشخصية")
+    : "";
   const verifiedPhone = request.auth?.token?.phone_number;
 
   if (name.length < 2 || name.length > 100 || licenseType.length < 1 || licenseType.length > 60) {
@@ -341,16 +345,6 @@ export const submitDriverApplication = onCall({ region: "us-central1" }, async r
   if (typeof verifiedPhone !== "string" || phone !== verifiedPhone) {
     throw new HttpsError("failed-precondition", "رقم الهاتف لا يطابق رقم Firebase الموثق.");
   }
-  if (idCardImagePath !== expectedIdPath || vehicleImagePath !== expectedVehiclePath
-    || (profileImagePath !== "" && profileImagePath !== expectedProfilePath)) {
-    throw new HttpsError("invalid-argument", "مسارات المستندات غير صالحة.");
-  }
-  await Promise.all([
-    validateDriverApplicationImage(expectedIdPath),
-    validateDriverApplicationImage(expectedVehiclePath),
-    ...(profileImagePath ? [validateDriverApplicationImage(expectedProfilePath)] : [])
-  ]);
-
   const driverRef = db.collection("drivers").doc(uid);
   return db.runTransaction(async tx => {
     const existing = await tx.get(driverRef);
@@ -369,9 +363,9 @@ export const submitDriverApplication = onCall({ region: "us-central1" }, async r
       idCardImageUrl: current?.idCardImageUrl ?? "",
       vehicleImageUrl: current?.vehicleImageUrl ?? "",
       profileImageUrl: current?.profileImageUrl ?? "",
-      idCardImagePath: expectedIdPath,
-      vehicleImagePath: expectedVehiclePath,
-      profileImagePath,
+      idCardBase64,
+      vehicleBase64,
+      profileBase64,
       status: "pending",
       approved: false,
       available: false,

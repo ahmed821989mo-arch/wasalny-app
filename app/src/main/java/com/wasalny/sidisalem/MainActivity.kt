@@ -654,7 +654,6 @@ fun DriverRegistrationScreen(
     var existingApplication by remember { mutableStateOf<DriverApplication?>(null) }
     var isSubmitting by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var uploadProgress by remember { mutableStateOf<Map<String, Float>>(emptyMap()) }
 
     fun persistUri(uri: Uri?) {
         if (uri != null) runCatching {
@@ -693,9 +692,9 @@ fun DriverRegistrationScreen(
         }
     }
 
-    suspend fun uploadImageIfNeeded(uid: String, imageType: String, image: Uri?, currentPath: String): String {
-        if (image == null && currentPath.isNotBlank() && repository.driverApplicationImageExists(uid, imageType, currentPath)) {
-            return currentPath
+    suspend fun encodeImageIfNeeded(uid: String, imageType: String, image: Uri?, currentData: String): String {
+        if (image == null && currentData.isNotBlank() && !currentData.startsWith("driverApplications/")) {
+            return currentData
         }
         val label = when (imageType) {
             "id-card" -> "صورة البطاقة"
@@ -707,30 +706,12 @@ fun DriverRegistrationScreen(
         require(contentType in listOf("image/jpeg", "image/png", "image/webp")) {
             "$label يجب أن تكون JPG أو PNG أو WEBP"
         }
-        val size = withContext(Dispatchers.IO) {
-            context.contentResolver.openInputStream(selectedImage)?.use { stream ->
-                val buffer = ByteArray(8192)
-                var total = 0L
-                while (true) {
-                    val count = stream.read(buffer)
-                    if (count < 0) break
-                    total += count
-                    require(total <= 5L * 1024 * 1024) { "حجم الصورة أكبر من 5 ميجابايت" }
-                }
-                total
-            } ?: 0L
-        }
-        require(size > 0) { "ملف الصورة فارغ أو غير متاح" }
         return try {
-            val path = repository.uploadDriverApplicationImage(uid, imageType, selectedImage, contentType) { transferred, total ->
-                uploadProgress = uploadProgress + (imageType to if (total > 0) transferred.toFloat() / total else 0f)
-            }
-            context.dataStore.edit { it[driverApplicationDraftKey(uid, imageType)] = path }
-            uploadProgress = uploadProgress - imageType
-            path
+            val imageBase64 = ImageService.compressAndConvertToBase64(context, selectedImage)
+            context.dataStore.edit { it[driverApplicationDraftKey(uid, imageType)] = imageBase64 }
+            imageBase64
         } catch (exception: Exception) {
-            uploadProgress = uploadProgress - imageType
-            throw IllegalStateException("فشل رفع $label. أعد المحاولة؛ بقية بيانات التسجيل محفوظة.", exception)
+            throw IllegalStateException("فشل تجهيز $label. أعد المحاولة؛ بقية بيانات التسجيل محفوظة.", exception)
         }
     }
 
@@ -792,13 +773,7 @@ fun DriverRegistrationScreen(
 
         if (step == 4) {
             Text("إرسال الطلب", fontWeight = FontWeight.Bold)
-            Text("سيُحفظ الطلب بعد اكتمال رفع المستندات المطلوبة.")
-            listOf("id-card" to "البطاقة", "vehicle" to "صورة التوكتوك", "profile" to "الصورة الشخصية").forEach { (type, label) ->
-                uploadProgress[type]?.let { progress ->
-                    Text("جارٍ رفع $label: ${(progress * 100).toInt()}%")
-                    LinearProgressIndicator(progress = progress, modifier = Modifier.fillMaxWidth())
-                }
-            }
+            Text("سيتم ضغط الصور وحفظها ضمن طلبك في Firestore بعد إرساله.")
         }
 
         if (error != null) {
@@ -819,13 +794,6 @@ fun DriverRegistrationScreen(
                             try {
                                 val uid = FirebaseAuth.getInstance().currentUser?.uid
                                 if (uid != null && repository.getDriverApplication(uid) == null) {
-                                    val draft = context.dataStore.data.first()
-                                    listOf("id-card", "vehicle", "profile").forEach { imageType ->
-                                        val path = draft[driverApplicationDraftKey(uid, imageType)].orEmpty()
-                                        if (path.isNotBlank()) {
-                                            runCatching { repository.deleteDriverApplicationDraftImage(uid, imageType, path) }
-                                        }
-                                    }
                                     context.dataStore.edit {
                                         it.remove(driverApplicationDraftKey(uid, "id-card"))
                                         it.remove(driverApplicationDraftKey(uid, "vehicle"))
@@ -868,15 +836,14 @@ fun DriverRegistrationScreen(
                             if (safePhone.isBlank() || name.trim().length < 2) {
                                 throw IllegalStateException("الاسم ورقم الهاتف مطلوبان")
                             }
-                            val currentApplication = repository.getDriverApplication(uid)
                             val safeName = name.trim()
                             val safeLicenseType = licenseType.trim().ifBlank { "مرخص" }
-                            idCardPath = uploadImageIfNeeded(uid, "id-card", idCardImage, idCardPath)
+                            idCardPath = encodeImageIfNeeded(uid, "id-card", idCardImage, idCardPath)
                             idCardImage = null
-                            vehiclePath = uploadImageIfNeeded(uid, "vehicle", vehicleImage, vehiclePath)
+                            vehiclePath = encodeImageIfNeeded(uid, "vehicle", vehicleImage, vehiclePath)
                             vehicleImage = null
                             if (profileImage != null || profilePath.isNotBlank()) {
-                                profilePath = uploadImageIfNeeded(uid, "profile", profileImage, profilePath)
+                                profilePath = encodeImageIfNeeded(uid, "profile", profileImage, profilePath)
                                 profileImage = null
                             }
                             repository.saveDriverApplication(
@@ -885,9 +852,9 @@ fun DriverRegistrationScreen(
                                 phone = safePhone,
                                 licenseType = safeLicenseType,
                                 vehicleType = "توك توك",
-                                idCardImagePath = idCardPath,
-                                vehicleImagePath = vehiclePath,
-                                profileImagePath = profilePath
+                                idCardBase64 = idCardPath,
+                                vehicleBase64 = vehiclePath,
+                                profileBase64 = profilePath
                             )
                             repository.saveUserProfile(uid, "driver", safeName, safePhone)
                             context.dataStore.edit {

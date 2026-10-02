@@ -1,6 +1,7 @@
 package com.wasalny.sidisalem
 
 import android.net.Uri
+import android.util.Base64
 import com.google.firebase.FirebaseException
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthException
@@ -220,14 +221,11 @@ class FirebaseRidesRepository(
 
     suspend fun saveDriverApplication(
         uid: String, name: String, phone: String, licenseType: String, vehicleType: String,
-        idCardImagePath: String = "", vehicleImagePath: String = "", profileImagePath: String = ""
+        idCardBase64: String, vehicleBase64: String, profileBase64: String = ""
     ) {
         require(vehicleType == "توك توك") { "المركبة المسموح بها هي التوكتوك فقط" }
-        require(idCardImagePath == "driverApplications/$uid/id-card") { "صورة البطاقة المطلوبة غير مكتملة" }
-        require(vehicleImagePath == "driverApplications/$uid/vehicle") { "صورة المركبة المطلوبة غير مكتملة" }
-        require(profileImagePath.isEmpty() || profileImagePath == "driverApplications/$uid/profile") {
-            "مسار الصورة الشخصية غير صالح"
-        }
+        require(idCardBase64.isNotBlank()) { "صورة البطاقة المطلوبة غير مكتملة" }
+        require(vehicleBase64.isNotBlank()) { "صورة المركبة المطلوبة غير مكتملة" }
         check(FirebaseAuth.getInstance().currentUser?.uid == uid) { "غير مصرح" }
         functions.getHttpsCallable("submitDriverApplication").call(
             mapOf(
@@ -235,9 +233,9 @@ class FirebaseRidesRepository(
                 "phone" to phone.trim(),
                 "licenseType" to licenseType.trim(),
                 "vehicleType" to vehicleType,
-                "idCardImagePath" to idCardImagePath,
-                "vehicleImagePath" to vehicleImagePath,
-                "profileImagePath" to profileImagePath
+                "idCardBase64" to idCardBase64,
+                "vehicleBase64" to vehicleBase64,
+                "profileBase64" to profileBase64
             )
         ).await()
     }
@@ -245,44 +243,12 @@ class FirebaseRidesRepository(
     suspend fun getDriverApplication(uid: String): DriverApplication? =
         drivers.document(uid).get().await().takeIf { it.exists() }?.toDriverApplication()
 
-    suspend fun driverApplicationImageExists(uid: String, imageType: String, path: String): Boolean {
-        require(imageType in listOf("id-card", "vehicle", "profile")) { "نوع الصورة غير صالح" }
-        require(path == "driverApplications/$uid/$imageType") { "مسار الصورة غير صالح" }
-        return runCatching { storage.reference.child(path).metadata.await(); true }.getOrDefault(false)
-    }
-
-    suspend fun deleteDriverApplicationDraftImage(uid: String, imageType: String, path: String) {
-        require(imageType in listOf("id-card", "vehicle", "profile")) { "نوع الصورة غير صالح" }
-        require(path == "driverApplications/$uid/$imageType") { "مسار الصورة غير صالح" }
-        check(FirebaseAuth.getInstance().currentUser?.uid == uid) { "غير مصرح" }
-        check(!drivers.document(uid).get().await().exists()) { "لا يمكن حذف صور طلب أُرسل للمراجعة" }
-        storage.reference.child(path).delete().await()
-    }
-
-    suspend fun uploadDriverApplicationImage(
-        uid: String,
-        imageType: String,
-        image: Uri,
-        contentType: String,
-        onProgress: (Long, Long) -> Unit = { _, _ -> }
-    ): String {
-        require(imageType in listOf("id-card", "vehicle", "profile")) { "نوع الصورة غير صالح" }
-        require(contentType in listOf("image/jpeg", "image/png", "image/webp")) { "اختر صورة JPG أو PNG أو WEBP" }
-        check(FirebaseAuth.getInstance().currentUser?.uid == uid) { "غير مصرح" }
-        val driver = drivers.document(uid).get().await()
-        check(!driver.exists() || driver.getBoolean("approved") != true) { "لا يمكن تعديل صور طلب سائق معتمد" }
-        val path = "driverApplications/$uid/$imageType"
-        val upload = storage.reference.child(path).putFile(
-            image,
-            StorageMetadata.Builder().setContentType(contentType).build()
-        )
-        upload.addOnProgressListener { snapshot -> onProgress(snapshot.bytesTransferred, snapshot.totalByteCount) }
-        upload.await()
-        return path
-    }
-
-    suspend fun getDriverApplicationImage(path: String): ByteArray =
-        storage.reference.child(path).getBytes(5L * 1024 * 1024).await()
+    suspend fun getDriverApplicationImage(imageData: String): ByteArray =
+        if (imageData.startsWith("driverApplications/")) {
+            storage.reference.child(imageData).getBytes(5L * 1024 * 1024).await()
+        } else {
+            Base64.decode(imageData, Base64.DEFAULT)
+        }
 
     fun listenDriverApplication(
         uid: String,
@@ -317,9 +283,9 @@ class FirebaseRidesRepository(
             idCardImageUrl = snapshot.getString("idCardImageUrl") ?: "",
             vehicleImageUrl = snapshot.getString("vehicleImageUrl") ?: "",
             profileImageUrl = snapshot.getString("profileImageUrl") ?: "",
-            idCardImagePath = snapshot.getString("idCardImagePath") ?: "",
-            vehicleImagePath = snapshot.getString("vehicleImagePath") ?: "",
-            profileImagePath = snapshot.getString("profileImagePath") ?: "",
+            idCardImagePath = snapshot.getString("idCardBase64") ?: snapshot.getString("idCardImagePath") ?: "",
+            vehicleImagePath = snapshot.getString("vehicleBase64") ?: snapshot.getString("vehicleImagePath") ?: "",
+            profileImagePath = snapshot.getString("profileBase64") ?: snapshot.getString("profileImagePath") ?: "",
             approved = snapshot.getBoolean("approved") == true,
             needsMoreData = snapshot.getBoolean("needsMoreData") == true,
             adminMessage = snapshot.getString("adminMessage") ?: "",
@@ -744,9 +710,9 @@ class FirebaseRidesRepository(
         idCardImageUrl = getString("idCardImageUrl") ?: "",
         vehicleImageUrl = getString("vehicleImageUrl") ?: "",
         profileImageUrl = getString("profileImageUrl") ?: "",
-        idCardImagePath = getString("idCardImagePath") ?: "",
-        vehicleImagePath = getString("vehicleImagePath") ?: "",
-        profileImagePath = getString("profileImagePath") ?: "",
+        idCardImagePath = getString("idCardBase64") ?: getString("idCardImagePath") ?: "",
+        vehicleImagePath = getString("vehicleBase64") ?: getString("vehicleImagePath") ?: "",
+        profileImagePath = getString("profileBase64") ?: getString("profileImagePath") ?: "",
         approved = getBoolean("approved") == true,
         needsMoreData = getBoolean("needsMoreData") == true,
         adminMessage = getString("adminMessage") ?: "",
