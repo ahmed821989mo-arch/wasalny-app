@@ -4,19 +4,20 @@
 
 ## النطاق والحدود
 
-راجعت ملفات Android/Kotlin وCompose وNavigation، تسجيل الدخول والأدوار، تسجيل السائق، الخريطة والرحلات، مستودع Firebase، خدمات الموقع والإشعارات، Cloud Functions، Firestore/Storage Rules والفهارس، إعدادات Gradle وManifest وFirebase، GitHub Actions، والوثائق ذات الصلة. راجعت التدفقات ساكنًا من الواجهة حتى طبقة Firebase؛ لم تتوفر بيئة Android أو مشروع Firebase حي لاختبار الرحلات من جهاز إلى جهاز، لذلك لا أصف كل التدفقات بأنها مجرّبة إنتاجيًا.
+راجعت ملفات Android/Kotlin وCompose وNavigation، تسجيل الدخول والأدوار، تسجيل السائق، الخريطة والرحلات، مستودع Firebase، خدمات الموقع والإشعارات، Cloud Functions، Firestore/Storage Rules والفهارس، إعدادات Gradle وManifest وFirebase، GitHub Actions، والوثائق ذات الصلة. راجعت التدفقات ساكنًا من الواجهة حتى طبقة Firebase، وبُني APK على GitHub Actions؛ لم أختبر الرحلات على جهاز أو Firebase حي.
 
 ## الملفات المعدلة في هذه الجولة
 
 1. `app/src/main/java/com/wasalny/sidisalem/MainActivity.kt`
 2. `app/src/main/java/com/wasalny/sidisalem/AuthScreens.kt`
 3. `app/src/main/java/com/wasalny/sidisalem/FirebaseRidesRepository.kt`
-4. `functions/src/index.ts`
-5. `firestore.rules`
-6. `functions/test/firestore.rules.test.cjs`
-7. `BUILD_APK_ON_GITHUB_AR.md`
-8. `FIRESTORE_SETUP_AR.md`
-9. `FINAL_AUDIT.md`
+4. `app/build.gradle.kts`
+5. `functions/src/index.ts`
+6. `firestore.rules`
+7. `functions/test/firestore.rules.test.cjs`
+8. `BUILD_APK_ON_GITHUB_AR.md`
+9. `FIRESTORE_SETUP_AR.md`
+10. `FINAL_AUDIT.md`
 
 لم تُنشأ نسخة مشروع أو Repository جديد، ولم تتغير هوية Firebase أو applicationId.
 
@@ -44,7 +45,10 @@
 - فحص Git history بحثًا عن أنماط مفاتيح خاصة ورموز اعتماد: لم يُعثر على تطابق؛ لم تُطبع قيم أسرار.
 - فحص ملفات Kotlin المعدلة عبر تشخيصات المحرر: لا أخطاء معروضة.
 - `git diff --check`: نجح قبل تحرير هذا التقرير؛ سيعاد ضمن الفحص النهائي قبل commit.
-- `./gradlew :app:processDebugGoogleServices --no-daemon`: تعذر قبل مهمة Firebase لأن Gradle 8.7 لا يعمل مع إصدار Java الموجود `25.0.4.1`. Android SDK غير مضبوط (`ANDROID_HOME` غير موجود)، ولذلك لم يكتمل Kotlin compile أو APK أو Gradle checks.
+- البناء المحلي تعذر في الحاوية لأن Gradle 8.7 لا يعمل مع Java `25.0.4.1` وAndroid SDK غير مضبوط. هذا قيد البيئة المحلية.
+- GitHub Actions للالتزام `fb81e8b410228dc83e5ed36166f45ff6340f76a5`: نجح `Build Wasalny APK` و`Validate Wasalny project`، بما يشمل Kotlin compilation وFunctions build/lint واختبارات Firestore/Storage.
+- artifact `Wasalny-APK` اكتمل رفعه وغير منتهي: [تشغيل بناء APK على GitHub](https://github.com/ahmed821989mo-arch/wasalny-app/actions/runs/36996049631).
+- كشف CI في التشغيل السابق استيراد `LocalLifecycleOwner` غير المتوافق مع نسخة Compose؛ صُحح الاستيراد وأُعيد الدفع، ثم نجح البناء والتحقق على الالتزام النهائي أعلاه.
 - لم تُشغّل اختبارات Android على جهاز/محاكي، ولم يُنشر Firebase أو تُختبر Cloud Functions على مشروع حي.
 
 ## حالة التدفقات المطلوبة
@@ -71,4 +75,4 @@
 
 ## الخلاصة
 
-نجح بناء وفحص Functions واختبار قواعد Firebase المحلي. لا يمكن اعتماد APK أو الادعاء بجاهزية إطلاق إنتاجي كاملة قبل إعادة Gradle باستخدام JDK 21 وAndroid SDK 35، واختبار التطبيق على جهازين، ونشر/اختبار Functions والقواعد على مشروع Firebase المقصود. لا يوجد «كود مشرف» ثابت داخل APK؛ صلاحية المشرف مرتبطة بالـUID الموثق والمدرج خادميًا.
+نجح بناء APK والتحقق عبر GitHub Actions باستخدام JDK 21، كما نجح بناء وفحص Functions واختبار قواعد Firebase المحلي. يلزم قبل اعتماد الإطلاق اختبار التطبيق على جهازين ونشر/اختبار Functions والقواعد على مشروع Firebase المقصود. لا يوجد «كود مشرف» ثابت داخل APK؛ صلاحية المشرف مرتبطة بالـUID الموثق والمدرج خادميًا.
