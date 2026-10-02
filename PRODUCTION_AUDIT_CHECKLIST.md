@@ -73,7 +73,7 @@ cd /workspaces/wasalny-app && ./gradlew testDebugUnitTest assembleDebug --no-dae
 - [ ] اختبار إصدار release الحقيقي: debug + release
 - [ ] التأكد من أن [app/build.gradle.kts](app/build.gradle.kts) يقرأ التوقيع من ملف محلي وليس من المصدر
 - [ ] اختبار تثبيت APK على أجهزة فعليّة
-- [ ] التحقق من أن المهمة في [.github/workflows/build-apk.yml](.github/workflows/build-apk.yml) تعمل على GitHub Actions
+- [ ] إضافة Secrets التوقيع وFirebase المطلوبة وتشغيل [.github/workflows/build.yml](.github/workflows/build.yml) بنجاح، والتحقق من APK وAAB الموقّعين المرفوعين كـ artifacts
 
 ### 8) Real User Flow Testing
 - [ ] تسجيل مستخدم جديد كـ customer

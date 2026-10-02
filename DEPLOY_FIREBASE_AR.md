@@ -30,7 +30,7 @@ firebase deploy --only firestore:rules,firestore:indexes,storage,functions
 ./gradlew assembleDebug
 ```
 
-أو استخدم GitHub Actions، حيث يوجد Workflow لفحص Android وCloud Functions.
+يُستخدم GitHub Actions لبناء إصدار Android موقّع حسب [دليل بناء الإصدار](README_GITHUB_APK_BUILD.md). نشر Cloud Functions والقواعد ما زال أمرًا منفصلًا عبر Firebase CLI كما في الخطوات أعلاه؛ لا ينشره هذا الـworkflow.
 
 ## مهم
 

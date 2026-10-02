@@ -3,7 +3,7 @@
 ## إعداد المشروع
 
 1. استخدم مشروع Firebase المحدد في `.firebaserc`، وأضف تطبيق Android بمعرّف الحزمة `com.wasalny.sidisalem`.
-2. `app/google-services.json` الحالي إعداد عميل Firebase عام ومتتبع في المستودع كي ينجح البناء من checkout نظيف. تحقق من تطابق مشروعه مع `.firebaserc` والحزمة `com.wasalny.sidisalem`. لا تضع بيانات اعتماد Admin SDK أو مفاتيح خدمة في التطبيق؛ يمكن تقييد مفتاح API من Google Cloud. يدعم workflow التحقق استبدال الملف بسر اختياري `GOOGLE_SERVICES_JSON` بصيغة Base64.
+2. `app/google-services.json` إعداد عميل Firebase ومتتبع في المستودع كي ينجح البناء من checkout نظيف. يتحقق Workflow الإصدار من تطابق المشروع والحزمة `com.wasalny.sidisalem`؛ ويمكن استبدال الملف بسر GitHub اختياري `GOOGLE_SERVICES_JSON` بصيغة Base64. لا تضع بيانات اعتماد Admin SDK أو مفاتيح خدمة في التطبيق، وقيّد API key من Google Cloud.
 3. من **Authentication → Sign-in method** فعّل **Phone**، وأضف بصمات SHA-1 وSHA-256 لتطبيق Android حتى يعمل تحقق SMS.
 4. أنشئ **Firestore Database**، ثم انشر القواعد والفهارس وCloud Functions من جذر المشروع:
 

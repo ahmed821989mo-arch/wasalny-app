@@ -2,6 +2,8 @@
 
 تاريخ المراجعة: 2026-10-02
 
+> ملاحظة تحديث: الأقسام التاريخية أدناه تصف حالة ما قبل تنظيف workflows. الحالة الحالية يحكمها `.github/workflows/build.yml` ودليل [إعداد بناء الإصدار](README_GITHUB_APK_BUILD.md)؛ تشغيلات Actions القديمة ليست تحققًا من workflow الحالي.
+
 ## النطاق والحدود
 
 راجعت ملفات Android/Kotlin وCompose وNavigation، تسجيل الدخول والأدوار، تسجيل السائق، الخريطة والرحلات، مستودع Firebase، خدمات الموقع والإشعارات، Cloud Functions، Firestore/Storage Rules والفهارس، إعدادات Gradle وManifest وFirebase، GitHub Actions، والوثائق ذات الصلة. راجعت التدفقات ساكنًا من الواجهة حتى طبقة Firebase، وبُني APK على GitHub Actions؛ لم أختبر الرحلات على جهاز أو Firebase حي.
@@ -23,8 +25,7 @@
 
 | الملف | الحالة | الملاحظة |
 |---|---|---|
-| `.github/workflows/build-apk.yml` | موجود | لا يقرأ GitHub Secrets؛ يبني باستخدام `app/google-services.json` من المستودع. |
-| `.github/workflows/validate-project.yml` | موجود | يقرأ `GOOGLE_SERVICES_JSON` اختياريًا بصيغة Base64؛ إن لم يوجد السر يستخدم الملف المتتبع إذا كان موجودًا. |
+| `.github/workflows/build.yml` | الحالي | يبني APK وAAB موقّعين ويرفعهما كـ artifact. يتطلب أسرار التوقيع الأربعة؛ `GOOGLE_SERVICES_JSON` اختياري بصيغة Base64 مع fallback إلى ملف العميل المتتبع. |
 | `.gitignore` | موجود | يستبعد keystore و`.pem` و`.p12`، لكنه لا يستبعد `.env` أو `serviceAccountKey.json` أو `app/google-services.json`. |
 | `firebase.json` | موجود | يحدد Firestore rules/indexes وStorage rules وFunctions runtime `nodejs22`. |
 | `.firebaserc` | موجود | المشروع الافتراضي `wasalny-app-f5dbb`. |
@@ -36,9 +37,9 @@
 
 ## GitHub Actions Secrets
 
-**المطلوب فعلًا للتشغيل الحالي:** لا يوجد Secret إلزامي؛ كلا الـworkflow يعملان من الملفات الحالية. اسم السر الوحيد المشار إليه في workflow هو:
+**المطلوب لبناء إصدار موقّع حاليًا:** أضف `ANDROID_KEYSTORE_BASE64` و`ANDROID_KEYSTORE_PASSWORD` و`ANDROID_KEY_ALIAS` و`ANDROID_KEY_PASSWORD` إلى Actions Secrets. يتوقف الـworkflow برسالة خطأ واضحة عند غياب أي منها. تفاصيل تجهيز keystore موجودة في [دليل بناء الإصدار](README_GITHUB_APK_BUILD.md).
 
-- `GOOGLE_SERVICES_JSON`، اختياري في `Validate Wasalny project` فقط. قيمته المتوقعة هي محتوى `google-services.json` كاملًا بعد تحويله إلى Base64. عند وجوده يستبدل إعداد Android في خطوة التحقق. `Build Wasalny APK` لا يقرأ هذا السر حاليًا.
+- `GOOGLE_SERVICES_JSON` اختياري، ويجب أن يحتوي ملف Firebase Android كاملًا بصيغة Base64. يتحقق الـworkflow من JSON ومعرّف المشروع والحزمة، ويستخدم `app/google-services.json` المتتبع إذا لم يوجد السر.
 
 **غير مستخدم حاليًا، فلا تنشئه لمجرد إعادة الربط:**
 
@@ -47,7 +48,7 @@
 - `serviceAccountKey.json`: غير مطلوب ولا ينبغي رفعه إلى المستودع.
 - لا توجد متغيرات Functions سرية حالية تستلزم `functions/.env`.
 
-تعذّر قراءة أسماء Secrets الموجودة حاليًا في إعدادات GitHub عبر التكامل المتاح (HTTP 403)، لذلك لا أستطيع تأكيد ما إذا كان `GOOGLE_SERVICES_JSON` موجودًا في الحساب. هذا لا يمنع التشغيل الحالي لأن الملف المتتبع متوفر.
+لا يمكن التحقق من وجود Actions Secrets في إعدادات GitHub من المستودع وحده. يجب إضافة أسرار التوقيع يدويًا قبل أول تشغيل ناجح؛ وجود ملف Firebase وحده لا يكفي لإصدار Release موقّع.
 
 إذا كان شرطكم أن **أي إعداد عميل لا يبقى في Git**، فالـworkflow الحالي لا يحقق ذلك بالكامل: يلزم إضافة `GOOGLE_SERVICES_JSON` إلى GitHub Actions، وجعل كل من workflow البناء والتحقق يكتبان الملف من السر، ثم استبعاد الملف وإزالته من Git. لم أغيّر ذلك هنا لأن المطلوب تقرير فقط ولم تُقدّم قيمة سرية. لا تضع Base64 في YAML أو في الكود؛ أضفه من GitHub → Settings → Secrets and variables → Actions.
 
@@ -74,7 +75,7 @@ gcloud iam service-accounts create wasalny-ci-deploy \
 
 ## Build وActions
 
-عند التدقيق، كان آخر بناء Android وWorkflow التحقق على SHA `7150f5a7c09caece412f1faa48da99015b880597` ناجحًا. يوجد artifact غير منتهي باسم `Wasalny-APK` بحجم يقارب 21 MB.
+التشغيلات التالية تاريخية وتخص SHA وملفات workflow السابقة؛ لا تثبت نجاح `Build Wasalny Release` الحالي. يلزم تشغيله بعد إضافة أسرار التوقيع والتحقق من APK وAAB الناتجين.
 
 - [Build Wasalny APK](https://github.com/ahmed821989mo-arch/wasalny-app/actions/runs/36996529943)
 - [Validate Wasalny project](https://github.com/ahmed821989mo-arch/wasalny-app/actions/runs/36996529887)
