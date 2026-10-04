@@ -13,8 +13,7 @@ const {
   getDocs,
   serverTimestamp,
   setDoc,
-  updateDoc,
-  writeBatch
+  updateDoc
 } = require("firebase/firestore");
 const { ref, uploadBytes } = require("firebase/storage");
 
@@ -163,12 +162,9 @@ test("clients cannot accept offers by writing ride state directly", async () => 
   }));
 });
 
-test("passenger ride and private contact can be created atomically", async () => {
+test("passengers cannot bypass server-side boundary checks when creating rides", async () => {
   const db = testEnvironment.authenticatedContext("passenger-1").firestore();
-  const batch = writeBatch(db);
-  batch.set(doc(db, "rides/ride-atomic"), rideData("passenger-1"));
-  batch.set(doc(db, "rides/ride-atomic/private/contact"), { customerPhone: "+201000000000" });
-  await assertSucceeds(batch.commit());
+  await assertFails(setDoc(doc(db, "rides/ride-atomic"), rideData("passenger-1")));
 });
 
 test("clients cannot create driver application records directly", async () => {

@@ -89,11 +89,63 @@ private fun driverApplicationDraftKey(uid: String, imageType: String) =
 object Config {
     const val LAT = 31.27133
     const val LON = 30.786165
-    const val RADIUS_KM = 5.0
     val CENTER = Coordinate(LAT, LON)
 }
 
 data class FavPlace(val name: String, val address: String, val lat: Double, val lon: Double)
+
+private fun loadSidiSalemBoundary(context: Context): List<List<Coordinate>> {
+    val boundary = context.assets.open("sidi-salem-boundary.json")
+        .bufferedReader().use { JSONObject(it.readText()) }
+    val polygons = boundary.getJSONArray("coordinates")
+    return buildList {
+        for (polygonIndex in 0 until polygons.length()) {
+            val outerRing = polygons.getJSONArray(polygonIndex).getJSONArray(0)
+            add(buildList {
+                for (pointIndex in 0 until outerRing.length()) {
+                    val point = outerRing.getJSONArray(pointIndex)
+                    add(Coordinate(latitude = point.getDouble(1), longitude = point.getDouble(0)))
+                }
+            })
+        }
+    }
+}
+
+private fun containsRing(latitude: Double, longitude: Double, ring: List<Coordinate>): Boolean {
+    var contains = false
+    var previousIndex = ring.lastIndex
+    for (index in ring.indices) {
+        val current = ring[index]
+        val previous = ring[previousIndex]
+        val cross = (longitude - previous.longitude) * (current.latitude - previous.latitude) -
+            (latitude - previous.latitude) * (current.longitude - previous.longitude)
+        if (kotlin.math.abs(cross) <= 1e-9
+            && longitude >= minOf(previous.longitude, current.longitude) - 1e-9
+            && longitude <= maxOf(previous.longitude, current.longitude) + 1e-9
+            && latitude >= minOf(previous.latitude, current.latitude) - 1e-9
+            && latitude <= maxOf(previous.latitude, current.latitude) + 1e-9) {
+            return true
+        }
+        val crossesLatitude = (current.latitude > latitude) != (previous.latitude > latitude)
+        if (crossesLatitude && longitude < (previous.longitude - current.longitude)
+            * (latitude - current.latitude) / (previous.latitude - current.latitude) + current.longitude) {
+            contains = !contains
+        }
+        previousIndex = index
+    }
+    return contains
+}
+
+private fun insideSidiSalem(point: Coordinate, boundary: List<List<Coordinate>>): Boolean =
+    boundary.any { containsRing(point.latitude, point.longitude, it) }
+
+private fun sidiSalemBoundaryCenter(boundary: List<List<Coordinate>>): Coordinate {
+    val points = boundary.flatten()
+    return Coordinate(
+        latitude = (points.minOf { it.latitude } + points.maxOf { it.latitude }) / 2,
+        longitude = (points.minOf { it.longitude } + points.maxOf { it.longitude }) / 2
+    )
+}
 
 fun distKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
     val earthRadiusKm = 6371.0
@@ -102,9 +154,6 @@ fun distKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
     val a = sin(dLat / 2).pow(2) + cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLon / 2).pow(2)
     return earthRadiusKm * 2 * atan2(sqrt(a), sqrt(1 - a))
 }
-
-fun inside(lat: Double, lon: Double) =
-    distKm(lat, lon, Config.LAT, Config.LON) <= Config.RADIUS_KM
 
 suspend fun geocode(context: Context, point: Coordinate): String = withContext(Dispatchers.IO) {
     try {
@@ -816,8 +865,8 @@ fun DriverRegistrationScreen(
                 onClick = {
                     if (step < 4) {
                         error = null
-                        if (step == 1 && (name.trim().length < 2 || phone.isBlank())) {
-                            error = "اكتب الاسم وتأكد من رقم الهاتف الموثق"
+                        if (step == 1 && (name.trim().length < 2 || !isValidEgyptPhone(phone))) {
+                            error = "اكتب الاسم وتأكد من أن رقم الهاتف المصري موثق"
                             return@Button
                         }
                         if (step == 2 && ((idCardImage == null && idCardPath.isBlank()) || (vehicleImage == null && vehiclePath.isBlank()))) {
@@ -833,8 +882,8 @@ fun DriverRegistrationScreen(
                             val uid = FirebaseAuth.getInstance().currentUser?.uid
                                 ?: error("انتهت جلسة الهاتف. سجّل الدخول مرة أخرى")
                             val safePhone = phone.trim()
-                            if (safePhone.isBlank() || name.trim().length < 2) {
-                                throw IllegalStateException("الاسم ورقم الهاتف مطلوبان")
+                            if (!isValidEgyptPhone(safePhone) || name.trim().length < 2) {
+                                throw IllegalStateException("الاسم ورقم الهاتف المصري الموثق مطلوبان")
                             }
                             val safeName = name.trim()
                             val safeLicenseType = licenseType.trim().ifBlank { "مرخص" }
@@ -968,7 +1017,7 @@ fun HomeV4(nav: NavController, role: String) {
                 Column(Modifier.padding(18.dp)) {
                     Text("أهلاً 👋", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Color.White)
                     Text(
-                        "سيدي سالم - رحلاتك داخل 5 كم فقط",
+                        "خدمة الرحلات داخل الحدود الإدارية لمركز سيدي سالم وقراه",
                         fontSize = 12.sp,
                         color = Color(0xFFE6F7ED)
                     )
@@ -1093,6 +1142,7 @@ private fun OpenStreetMapView(
     dropoffAddress: String,
     mapCenter: Coordinate,
     mapZoom: Float,
+    serviceBoundary: List<List<Coordinate>>,
     onMapClick: (Coordinate) -> Unit
 ) {
     val latestOnMapClick by rememberUpdatedState(onMapClick)
@@ -1153,16 +1203,14 @@ private fun OpenStreetMapView(
                 it is Marker || it is Polyline || it is Polygon
             })
 
-            val serviceArea = Polygon().apply {
-                points = Polygon.pointsAsCircle(
-                    OsmGeoPoint(Config.CENTER.latitude, Config.CENTER.longitude),
-                    Config.RADIUS_KM * 1000
-                )
-                fillPaint.color = android.graphics.Color.argb(34, 13, 124, 62)
-                outlinePaint.color = android.graphics.Color.rgb(13, 124, 62)
-                outlinePaint.strokeWidth = 2f
+            serviceBoundary.forEach { boundary ->
+                map.overlays.add(Polygon().apply {
+                    points = boundary.map { OsmGeoPoint(it.latitude, it.longitude) }
+                    fillPaint.color = android.graphics.Color.argb(34, 13, 124, 62)
+                    outlinePaint.color = android.graphics.Color.rgb(13, 124, 62)
+                    outlinePaint.strokeWidth = 3f
+                })
             }
-            map.overlays.add(serviceArea)
 
             if (pickup != null && dropoff != null) {
                 map.overlays.add(Polyline().apply {
@@ -1214,8 +1262,9 @@ fun MapV4(
     var dropoff by remember(initialDestination) {
         mutableStateOf(initialDestination?.let { Coordinate(it.lat, it.lon) })
     }
-    var mapCenter by remember { mutableStateOf(Config.CENTER) }
-    var mapZoom by remember { mutableFloatStateOf(14.5f) }
+    val serviceBoundary = remember(ctx) { loadSidiSalemBoundary(ctx) }
+    var mapCenter by remember(serviceBoundary) { mutableStateOf(sidiSalemBoundaryCenter(serviceBoundary)) }
+    var mapZoom by remember { mutableFloatStateOf(10.5f) }
     var pickupAddr by remember { mutableStateOf("") }
     var dropoffAddr by remember(initialDestination) {
         mutableStateOf(initialDestination?.address.orEmpty())
@@ -1278,6 +1327,10 @@ fun MapV4(
                 ).await() ?: fused.lastLocation.await()
                 loc?.let {
                     val point = Coordinate(it.latitude, it.longitude)
+                    if (!insideSidiSalem(point, serviceBoundary)) {
+                        resultMsg = "خدمة وصلني متاحة داخل الحدود الإدارية لمركز سيدي سالم فقط."
+                        return@let
+                    }
                     pendingRideId = null
                     pickup = point
                     pickupAddr = "جاري تحديد العنوان..."
@@ -1313,7 +1366,8 @@ fun MapV4(
                 dropoff!!.latitude, dropoff!!.longitude
             )
         else 0.0
-    val isInside = pickup?.let { inside(it.latitude, it.longitude) } ?: true
+    val isInside = (pickup?.let { insideSidiSalem(it, serviceBoundary) } ?: true)
+        && (dropoff?.let { insideSidiSalem(it, serviceBoundary) } ?: true)
 
     Box(Modifier.fillMaxSize()) {
         OpenStreetMapView(
@@ -1324,8 +1378,11 @@ fun MapV4(
             dropoffAddress = dropoffAddr,
             mapCenter = mapCenter,
             mapZoom = mapZoom,
+            serviceBoundary = serviceBoundary,
             onMapClick = { point ->
-                if (selectingPickup) {
+                if (!insideSidiSalem(point, serviceBoundary)) {
+                    resultMsg = "اختر نقطة داخل الحدود الإدارية لمركز سيدي سالم."
+                } else if (selectingPickup) {
                     pendingRideId = null
                     pickup = point
                     pickupAddr = "جاري تحديد العنوان..."
@@ -1416,7 +1473,7 @@ fun MapV4(
                         Text("إلى: $dropoffAddr", fontSize = 10.sp, maxLines = 1)
                     if (!isInside)
                         Text(
-                            "⚠️ خارج نطاق 5 كم",
+                            "⚠️ إحدى النقطتين خارج حدود مركز سيدي سالم",
                             color = Color.Red,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
@@ -1547,8 +1604,8 @@ fun MapV4(
                                 )
                                 pendingRideId = null
                                 onRideCreated(rideId)
-                            } catch (_: Exception) {
-                                resultMsg = "تعذر إنشاء الطلب. تحقق من الاتصال وإعداد Firebase ثم حاول مرة أخرى."
+                            } catch (e: Exception) {
+                                resultMsg = e.toUserMessage("تعذر إنشاء الطلب. تحقق من الاتصال وحاول مرة أخرى.")
                             } finally {
                                 isLoading = false
                                 showConfirm = false

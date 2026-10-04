@@ -30,6 +30,8 @@ android {
     namespace = "com.wasalny.sidisalem"
     compileSdk = 35
 
+    sourceSets.getByName("main").assets.srcDir(rootProject.file("functions/src/data"))
+
     defaultConfig {
         applicationId = "com.wasalny.sidisalem"
         minSdk = 24

@@ -51,10 +51,13 @@ class DriverLocationService : Service() {
                 if (location.accuracy > 100f) return
                 functions.getHttpsCallable("heartbeatDriver").call(
                     mapOf("lat" to location.latitude, "lon" to location.longitude)
-                ).addOnFailureListener { error ->
-                    val expired = error is FirebaseFunctionsException &&
+                ).addOnSuccessListener { result ->
+                    val response = result.getData() as? Map<*, *>
+                    if (response?.get("available") == false) stopSelf()
+                }.addOnFailureListener { error ->
+                    val unavailable = error is FirebaseFunctionsException &&
                         error.code == FirebaseFunctionsException.Code.FAILED_PRECONDITION
-                    if (expired) stopSelf()
+                    if (unavailable) stopSelf()
                 }
                 db.collection("rides")
                     .whereEqualTo("selectedDriverId", uid)

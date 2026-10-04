@@ -24,7 +24,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
+import com.google.android.gms.location.Priority
 import com.google.android.gms.location.LocationServices
+import com.google.android.gms.tasks.CancellationTokenSource
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.ListenerRegistration
 import kotlinx.coroutines.launch
@@ -32,6 +34,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.tasks.await
 import org.osmdroid.config.Configuration
 import org.osmdroid.util.GeoPoint as OsmGeoPoint
 import org.osmdroid.views.MapView
@@ -106,7 +109,7 @@ private fun CustomerRideOffersScreen(rideId: String, customerId: String, nav: Na
             if (current.status == "scheduled" && current.bookingType == "school") {
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "الحجز محفوظ. عند حلول الموعد سيتم إرساله لكل السائقين المتاحين، وليس بنظام نطاق 500م/1كم/2كم/5كم.",
+                    "الحجز محفوظ. عند حلول الموعد سيتم إرساله لكل السائقين المتاحين داخل حدود مركز سيدي سالم.",
                     color = Color(0xFF0D7C3E),
                     fontSize = 12.sp
                 )
@@ -135,7 +138,7 @@ private fun CustomerRideOffersScreen(rideId: String, customerId: String, nav: Na
                 LinearProgressIndicator(Modifier.fillMaxWidth())
                 Text(
                     if (ride?.bookingType == "school") "تم إرسال الحجز لكل السائقين المتاحين عند موعد الرحلة."
-                    else "بنوسع البحث تلقائياً: 500م → 1كم → 2كم → 5كم",
+                    else "بنوسع البحث تلقائياً حتى نغطي مركز سيدي سالم بالكامل.",
                     color = Color.Gray
                 )
             } else {
@@ -498,7 +501,16 @@ private fun DriverRideRequestsScreen(driverId: String) {
                         availabilityBusy = true
                         scope.launch {
                             try {
-                                repository.setDriverAvailability(driverId, target)
+                                val currentLocation = if (target) {
+                                    val fused = LocationServices.getFusedLocationProviderClient(context)
+                                    val location = fused.getCurrentLocation(
+                                        Priority.PRIORITY_HIGH_ACCURACY,
+                                        CancellationTokenSource().token
+                                    ).await() ?: fused.lastLocation.await()
+                                        ?: error("تعذر تحديد موقعك. تأكد من تشغيل GPS.")
+                                    Coordinate(location.latitude, location.longitude)
+                                } else null
+                                repository.setDriverAvailability(driverId, target, currentLocation)
                                 online = target
                                 val serviceIntent = Intent(context, DriverLocationService::class.java).apply {
                                     putExtra(DriverLocationService.EXTRA_UID, driverId)

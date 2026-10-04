@@ -31,16 +31,6 @@ private val BrandGreen = Color(0xFF0D7C3E)
 private val BrandGreenDark = Color(0xFF0A5A2C)
 private val SurfaceMist = Color(0xFFF6FAF7)
 
-private fun normalizeEgyptPhone(value: String): String {
-    val digits = value.filter(Char::isDigit)
-    return when {
-        digits.startsWith("00") -> "+${digits.drop(2)}"
-        digits.startsWith("20") -> "+$digits"
-        digits.startsWith("0") -> "+20${digits.drop(1)}"
-        else -> "+$digits"
-    }
-}
-
 @Composable
 fun PhoneAuthScreen(onAuthenticated: () -> Unit) {
     val context = LocalContext.current
@@ -116,13 +106,18 @@ fun PhoneAuthScreen(onAuthenticated: () -> Unit) {
                 }
                 Spacer(Modifier.height(16.dp))
                 Button(
-                    enabled = !busy && if (verificationId == null) phone.filter(Char::isDigit).length >= 10 else code.length == 6,
+                    enabled = !busy && if (verificationId == null) isValidEgyptPhone(phone) else code.length == 6,
                     modifier = Modifier.fillMaxWidth().height(52.dp),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = BrandGreen),
                     onClick = {
                         error = null
                         if (verificationId == null) {
+                            val normalizedPhone = normalizeEgyptPhoneStrict(phone)
+                            if (normalizedPhone == null) {
+                                error = "أدخل رقم موبايل مصري صحيح يبدأ بـ 010 أو 011 أو 012 أو 015"
+                                return@Button
+                            }
                             val act = activity
                             if (act == null) { error = "تعذر فتح تحقق الهاتف"; return@Button }
                             busy = true
@@ -137,7 +132,7 @@ fun PhoneAuthScreen(onAuthenticated: () -> Unit) {
                             }
                             PhoneAuthProvider.verifyPhoneNumber(
                                 PhoneAuthOptions.newBuilder(auth)
-                                    .setPhoneNumber(normalizeEgyptPhone(phone))
+                                    .setPhoneNumber(normalizedPhone)
                                     .setTimeout(60L, TimeUnit.SECONDS)
                                     .setActivity(act)
                                     .setCallbacks(callbacks)
@@ -188,7 +183,7 @@ fun CustomerProfileScreen(onComplete: (String) -> Unit, onBack: () -> Unit) {
                         val id = uid
                         if (id == null) { error = "انتهت جلسة الحساب"; return@Button }
                         if (name.trim().length < 2) { error = "اكتب الاسم بالكامل"; return@Button }
-                        if (phone.isBlank()) { error = "رقم الهاتف غير متاح"; return@Button }
+                        if (!isValidEgyptPhone(phone)) { error = "رقم الهاتف الموثق ليس رقم موبايل مصريًا صحيحًا"; return@Button }
                         saving = true
                         scope.launch {
                             try {

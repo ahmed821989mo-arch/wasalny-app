@@ -307,10 +307,16 @@ class FirebaseRidesRepository(
         }
     }
 
-    suspend fun setDriverAvailability(uid: String, available: Boolean) {
+    suspend fun setDriverAvailability(uid: String, available: Boolean, location: Coordinate? = null) {
         check(FirebaseAuth.getInstance().currentUser?.uid == uid) { "غير مصرح" }
+        val request: Map<String, Any> = if (available) {
+            val point = requireNotNull(location) { "تعذر تحديد موقعك الحالي داخل نطاق الخدمة" }
+            mapOf("available" to true, "lat" to point.latitude, "lon" to point.longitude)
+        } else {
+            mapOf("available" to false)
+        }
         functions.getHttpsCallable("setDriverAvailability")
-            .call(mapOf("available" to available))
+            .call(request)
             .await()
     }
 
@@ -352,33 +358,27 @@ class FirebaseRidesRepository(
         require(bookingType == "now" || bookingType == "school") { "نوع الحجز غير صالح" }
         require(requestId.matches(Regex("[A-Fa-f0-9]{32}"))) { "معرّف الطلب غير صالح" }
         assertCustomerNotBanned(customerId)
-        val rideRef = rides.document(requestId)
-        val isScheduled = bookingType == "school" && scheduledAt != null && scheduledAt > System.currentTimeMillis()
         if (bookingType == "school") require(scheduledAt != null && scheduledAt > System.currentTimeMillis() + 5 * 60_000) { "موعد الحجز يجب أن يكون بعد 5 دقائق على الأقل" }
         if (bookingType == "now") require(scheduledAt == null) { "الرحلة الفورية لا تقبل موعدًا مسبقًا" }
-        val rideData = mapOf(
-            "customerId" to customerId, "customerName" to customerName,
-            "fromAddress" to fromAddress, "toAddress" to toAddress,
-            "fromLat" to from.latitude, "fromLon" to from.longitude,
-            "toLat" to to.latitude, "toLon" to to.longitude,
-            "distanceKm" to distanceKm, "femaleMode" to femaleMode, "withLuggage" to withLuggage,
-            "bookingType" to bookingType, "status" to if (isScheduled) "scheduled" else "searching",
-            "searchRadiusMeters" to 500, "searchStage" to 0,
-            "scheduledAt" to scheduledAt,
-            "invitedDriverIds" to emptyList<String>(),
-            "createdAt" to FieldValue.serverTimestamp(), "updatedAt" to FieldValue.serverTimestamp()
-        )
-        val batch = db.batch()
-        batch.set(rideRef, rideData)
-        batch.set(rideRef.collection("private").document("contact"), mapOf("customerPhone" to customerPhone))
-        try {
-            batch.commit().await()
-        } catch (writeError: Exception) {
-            val existingRide = runCatching { rideRef.get().await() }.getOrNull()
-            if (existingRide?.getString("customerId") == customerId) return rideRef.id
-            throw writeError
-        }
-        return rideRef.id
+        check(FirebaseAuth.getInstance().currentUser?.uid == customerId) { "غير مصرح" }
+        functions.getHttpsCallable("createRideRequest").call(
+            mapOf(
+                "requestId" to requestId,
+                "customerName" to customerName,
+                "customerPhone" to customerPhone,
+                "fromAddress" to fromAddress,
+                "toAddress" to toAddress,
+                "fromLat" to from.latitude,
+                "fromLon" to from.longitude,
+                "toLat" to to.latitude,
+                "toLon" to to.longitude,
+                "femaleMode" to femaleMode,
+                "withLuggage" to withLuggage,
+                "bookingType" to bookingType,
+                "scheduledAt" to scheduledAt
+            )
+        ).await()
+        return requestId
     }
 
     suspend fun runSearch(rideId: String) {

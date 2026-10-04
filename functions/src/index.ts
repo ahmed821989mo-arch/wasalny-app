@@ -7,11 +7,12 @@ import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 import type { QueryDocumentSnapshot } from "firebase-admin/firestore";
 import { geohashQueryBounds, distanceBetween, geohashForLocation } from "geofire-common";
+import { isInsideSidiSalem } from "./sidi-salem-boundary";
 
 initializeApp();
 const db = getFirestore();
-const radii = [500, 1000, 2000, 5000];
-const waitMs = 12000;
+const radii = [500, 1000, 2000, 5000, 10000, 20000, 45000];
+const waitMs = 8000;
 const activeRideStatuses = ["accepted", "driver_arriving", "driver_arrived", "in_progress"];
 
 function requireAuth(request: any): string {
@@ -46,6 +47,7 @@ function subscriptionAmount(driver: FirebaseFirestore.DocumentData) {
 }
 
 async function nearbyDrivers(lat: number, lon: number, radius: number) {
+  if (!isInsideSidiSalem(lat, lon)) return [];
   const bounds = geohashQueryBounds([lat, lon], radius);
   const result = new Map<string, QueryDocumentSnapshot>();
   for (const [startHash, endHash] of bounds) {
@@ -54,6 +56,7 @@ async function nearbyDrivers(lat: number, lon: number, radius: number) {
     snap.docs.forEach(doc => {
       const d = doc.data();
       if (typeof d.lat !== "number" || typeof d.lon !== "number") return;
+      if (!isInsideSidiSalem(d.lat, d.lon)) return;
       const expiry = d.subscriptionExpiresAt?.toMillis?.()
         ?? (typeof d.subscriptionExpiresAt === "number" ? d.subscriptionExpiresAt : 0);
       if (expiry <= Date.now()) return;
@@ -81,7 +84,9 @@ async function allAvailableDrivers() {
       const expiry = d.subscriptionExpiresAt?.toMillis?.()
         ?? (typeof d.subscriptionExpiresAt === "number" ? d.subscriptionExpiresAt : 0);
       const updated = d.updatedAt?.toMillis?.() ?? 0;
-      return expiry > Date.now() && Date.now() - updated <= 45000;
+      return typeof d.lat === "number" && typeof d.lon === "number"
+        && isInsideSidiSalem(d.lat, d.lon)
+        && expiry > Date.now() && Date.now() - updated <= 45000;
     }));
     if (page.size < 400) break;
     cursor = page.docs[page.docs.length - 1];
@@ -154,6 +159,10 @@ async function performRideSearch(uid: string, rideId: string) {
   if (!rideSnap.exists) throw new HttpsError("not-found", "الرحلة غير موجودة");
   const ride = rideSnap.data()!;
   if (ride.customerId !== uid) throw new HttpsError("permission-denied", "هذه الرحلة ليست لحسابك");
+  if (!isInsideSidiSalem(ride.fromLat, ride.fromLon)
+    || !isInsideSidiSalem(ride.toLat, ride.toLon)) {
+    throw new HttpsError("failed-precondition", "الرحلة يجب أن تبدأ وتنتهي داخل حدود مركز سيدي سالم.");
+  }
   if (ride.status !== "searching") return { status: ride.status };
 
   const lock = await db.runTransaction(async tx => {
@@ -342,8 +351,10 @@ export const submitDriverApplication = onCall({ region: "us-central1" }, async r
   if (vehicleType !== "توك توك") {
     throw new HttpsError("invalid-argument", "المركبة المسموح بها هي التوكتوك فقط.");
   }
-  if (typeof verifiedPhone !== "string" || phone !== verifiedPhone) {
-    throw new HttpsError("failed-precondition", "رقم الهاتف لا يطابق رقم Firebase الموثق.");
+  if (typeof verifiedPhone !== "string"
+    || !/^\+201[0125][0-9]{8}$/.test(verifiedPhone)
+    || phone !== verifiedPhone) {
+    throw new HttpsError("failed-precondition", "يجب استخدام رقم موبايل مصري صحيح وموثق من Firebase.");
   }
   const driverRef = db.collection("drivers").doc(uid);
   return db.runTransaction(async tx => {
@@ -383,6 +394,99 @@ export const submitDriverApplication = onCall({ region: "us-central1" }, async r
     else tx.create(driverRef, application);
     return { status: "pending" };
   });
+});
+
+export const createRideRequest = onCall({ region: "us-central1" }, async request => {
+  const uid = requireAuth(request);
+  const requestId = String(request.data?.requestId ?? "");
+  const customerName = String(request.data?.customerName ?? "").trim();
+  const customerPhone = String(request.data?.customerPhone ?? "").trim();
+  const fromAddress = String(request.data?.fromAddress ?? "").trim();
+  const toAddress = String(request.data?.toAddress ?? "").trim();
+  const fromLat = request.data?.fromLat;
+  const fromLon = request.data?.fromLon;
+  const toLat = request.data?.toLat;
+  const toLon = request.data?.toLon;
+  const bookingType = request.data?.bookingType;
+  const scheduledAtMillis = request.data?.scheduledAt;
+  const verifiedPhone = request.auth?.token?.phone_number;
+
+  if (!/^[A-Fa-f0-9]{32}$/.test(requestId)
+    || customerName.length < 2 || customerName.length > 100
+    || fromAddress.length < 1 || fromAddress.length > 300
+    || toAddress.length < 1 || toAddress.length > 300
+    || typeof customerPhone !== "string"
+    || typeof verifiedPhone !== "string"
+    || !/^\+201[0125][0-9]{8}$/.test(verifiedPhone)
+    || customerPhone !== verifiedPhone) {
+    throw new HttpsError("invalid-argument", "راجع بيانات الحساب ونقطتي الرحلة.");
+  }
+  if (![fromLat, fromLon, toLat, toLon].every(value => typeof value === "number" && Number.isFinite(value))
+    || !isInsideSidiSalem(fromLat, fromLon) || !isInsideSidiSalem(toLat, toLon)) {
+    throw new HttpsError("failed-precondition", "الرحلة يجب أن تبدأ وتنتهي داخل حدود مركز سيدي سالم.");
+  }
+  if (bookingType !== "now" && bookingType !== "school") {
+    throw new HttpsError("invalid-argument", "نوع الحجز غير صالح.");
+  }
+  if (bookingType === "now" && scheduledAtMillis != null) {
+    throw new HttpsError("invalid-argument", "الرحلة الفورية لا تقبل موعدًا مسبقًا.");
+  }
+  if (bookingType === "school"
+    && (typeof scheduledAtMillis !== "number"
+      || !Number.isFinite(scheduledAtMillis)
+      || scheduledAtMillis <= Date.now() + 5 * 60_000)) {
+    throw new HttpsError("invalid-argument", "موعد الحجز يجب أن يكون بعد 5 دقائق على الأقل.");
+  }
+
+  const distanceKm = distanceBetween([fromLat, fromLon], [toLat, toLon]);
+  if (!Number.isFinite(distanceKm) || distanceKm <= 0 || distanceKm > 50) {
+    throw new HttpsError("invalid-argument", "المسافة بين نقطتي الرحلة غير صالحة.");
+  }
+
+  const userRef = db.collection("users").doc(uid);
+  const rideRef = db.collection("rides").doc(requestId);
+  const privateContactRef = rideRef.collection("private").doc("contact");
+  await db.runTransaction(async tx => {
+    const [existing, user] = await Promise.all([tx.get(rideRef), tx.get(userRef)]);
+    if (existing.exists) {
+      if (existing.get("customerId") !== uid) {
+        throw new HttpsError("already-exists", "معرّف الرحلة مستخدم.");
+      }
+      return;
+    }
+
+    const banUntil = user.get("banUntil");
+    const banUntilMillis = banUntil?.toMillis?.() ?? (typeof banUntil === "number" ? banUntil : 0);
+    if (banUntilMillis > Date.now()) {
+      throw new HttpsError("failed-precondition", "طلبات الرحلات موقوفة مؤقتًا عن حسابك.");
+    }
+
+    const isScheduled = bookingType === "school";
+    const now = FieldValue.serverTimestamp();
+    tx.create(rideRef, {
+      customerId: uid,
+      customerName,
+      fromAddress,
+      toAddress,
+      fromLat,
+      fromLon,
+      toLat,
+      toLon,
+      distanceKm,
+      femaleMode: request.data?.femaleMode === true,
+      withLuggage: request.data?.withLuggage === true,
+      bookingType,
+      status: isScheduled ? "scheduled" : "searching",
+      searchRadiusMeters: 500,
+      searchStage: 0,
+      invitedDriverIds: [],
+      scheduledAt: isScheduled ? Timestamp.fromMillis(scheduledAtMillis) : null,
+      createdAt: now,
+      updatedAt: now
+    });
+    tx.create(privateContactRef, { customerPhone });
+  });
+  return { rideId: requestId };
 });
 
 // Server-side safety net: an immediate ride still starts searching if the
@@ -788,6 +892,10 @@ export const heartbeatDriver = onCall({ region: "us-central1" }, async request =
   const ref = db.collection("drivers").doc(uid); const snap = await ref.get();
   if (!snap.exists || snap.data()?.approved !== true) throw new HttpsError("permission-denied", "السائق غير معتمد");
   if (snap.data()?.available !== true) return { available: false };
+  if (!isInsideSidiSalem(lat, lon)) {
+    await ref.update({ available: false, updatedAt: FieldValue.serverTimestamp() });
+    return { available: false };
+  }
   const expiry = snap.data()?.subscriptionExpiresAt;
   const expiryMillis = expiry?.toMillis?.() ?? (typeof expiry === "number" ? expiry : 0);
   if (expiryMillis <= Date.now()) {
@@ -803,6 +911,13 @@ export const setDriverAvailability = onCall({ region: "us-central1" }, async req
   const available = request.data?.available;
   if (typeof available !== "boolean") {
     throw new HttpsError("invalid-argument", "حالة التوفر غير صالحة");
+  }
+  const lat = request.data?.lat;
+  const lon = request.data?.lon;
+  if (available && (typeof lat !== "number" || typeof lon !== "number"
+    || !Number.isFinite(lat) || !Number.isFinite(lon)
+    || !isInsideSidiSalem(lat, lon))) {
+    throw new HttpsError("failed-precondition", "يجب أن يكون موقع السائق داخل حدود مركز سيدي سالم للتوفر.");
   }
 
   const driverRef = db.collection("drivers").doc(uid);
@@ -832,7 +947,13 @@ export const setDriverAvailability = onCall({ region: "us-central1" }, async req
       throw new HttpsError("failed-precondition", "أنه الرحلة الحالية قبل استقبال رحلات جديدة");
     }
 
-    tx.update(driverRef, { available: true, updatedAt: FieldValue.serverTimestamp() });
+    tx.update(driverRef, {
+      available: true,
+      lat,
+      lon,
+      geohash: geohashForLocation([lat, lon]),
+      updatedAt: FieldValue.serverTimestamp()
+    });
     return { available: true };
   });
 });

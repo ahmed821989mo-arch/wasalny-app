@@ -43,16 +43,6 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.active == true;
     }
 
-    function notBanned(uid) {
-      let userPath = /databases/$(database)/documents/users/$(uid);
-      return !exists(userPath)
-        || !get(userPath).data.keys().hasAny(['banUntil'])
-        || (get(userPath).data.banUntil is timestamp
-          && get(userPath).data.banUntil <= request.time)
-        || (get(userPath).data.banUntil is int
-          && get(userPath).data.banUntil <= request.time.toMillis());
-    }
-
     match /admins/{adminId} {
       allow get: if signedIn() && request.auth.uid == adminId;
       allow list, create, update, delete: if false;
@@ -142,37 +132,7 @@ service cloud.firestore {
     }
 
     match /rides/{rideId} {
-      allow create: if signedIn()
-        && request.resource.data.customerId == request.auth.uid
-        && notBanned(request.auth.uid)
-        && request.resource.data.status in ['searching', 'scheduled']
-        && request.resource.data.customerName is string
-        && request.resource.data.fromAddress is string
-        && request.resource.data.toAddress is string
-        && validCoordinates(request.resource.data.fromLat, request.resource.data.fromLon)
-        && validCoordinates(request.resource.data.toLat, request.resource.data.toLon)
-        && request.resource.data.distanceKm is number
-        && request.resource.data.distanceKm > 0
-        && request.resource.data.distanceKm <= 50
-        && request.resource.data.femaleMode is bool
-        && request.resource.data.withLuggage is bool
-        && request.resource.data.searchRadiusMeters == 500
-        && request.resource.data.searchStage == 0
-        && request.resource.data.invitedDriverIds is list
-        && request.resource.data.invitedDriverIds.size() == 0
-        && request.resource.data.createdAt == request.time
-        && request.resource.data.keys().hasAll([
-          'customerId', 'customerName', 'fromAddress', 'toAddress', 'fromLat', 'fromLon',
-          'toLat', 'toLon', 'distanceKm', 'femaleMode', 'withLuggage', 'bookingType', 'status',
-          'searchRadiusMeters', 'searchStage', 'invitedDriverIds', 'scheduledAt', 'createdAt', 'updatedAt'
-        ])
-        && request.resource.data.keys().hasOnly([
-          'customerId', 'customerName', 'fromAddress', 'toAddress', 'fromLat', 'fromLon',
-          'toLat', 'toLon', 'distanceKm', 'femaleMode', 'withLuggage', 'bookingType', 'status',
-          'searchRadiusMeters', 'searchStage', 'invitedDriverIds', 'scheduledAt', 'createdAt', 'updatedAt'
-        ])
-        && request.resource.data.bookingType in ['now', 'school']
-        && ((request.resource.data.bookingType == 'now' && request.resource.data.status == 'searching' && request.resource.data.scheduledAt == null) || (request.resource.data.bookingType == 'school' && request.resource.data.status == 'scheduled' && request.resource.data.scheduledAt is timestamp));
+      allow create: if false;
 
       allow get: if signedIn() && (
         resource.data.customerId == request.auth.uid

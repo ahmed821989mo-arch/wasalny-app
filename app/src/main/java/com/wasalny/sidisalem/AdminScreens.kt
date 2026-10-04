@@ -52,16 +52,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import java.util.concurrent.TimeUnit
 
-private fun toEgyptianPhone(value: String): String {
-    val digits = value.filter(Char::isDigit)
-    return when {
-        digits.startsWith("00") -> "+${digits.drop(2)}"
-        digits.startsWith("20") -> "+$digits"
-        digits.startsWith("0") -> "+20${digits.drop(1)}"
-        else -> "+$digits"
-    }
-}
-
 @Composable
 fun AdminLoginScreen(onBack: () -> Unit, onSuccess: () -> Unit) {
     val context = LocalContext.current
@@ -127,10 +117,15 @@ fun AdminLoginScreen(onBack: () -> Unit, onSuccess: () -> Unit) {
         }
         Spacer(Modifier.size(12.dp))
         Button(
-            enabled = !busy && if (verificationId == null) phone.filter(Char::isDigit).length >= 10 else code.length == 6,
+            enabled = !busy && if (verificationId == null) isValidEgyptPhone(phone) else code.length == 6,
             onClick = {
                 error = null
                 if (verificationId == null) {
+                    val normalizedPhone = normalizeEgyptPhoneStrict(phone)
+                    if (normalizedPhone == null) {
+                        error = "أدخل رقم موبايل مصري صحيح"
+                        return@Button
+                    }
                     val currentActivity = activity
                     if (currentActivity == null) {
                         error = "تعذر فتح تحقق الهاتف"
@@ -155,7 +150,7 @@ fun AdminLoginScreen(onBack: () -> Unit, onSuccess: () -> Unit) {
                             }
                         }
                         val options = PhoneAuthOptions.newBuilder(auth)
-                            .setPhoneNumber(toEgyptianPhone(phone))
+                            .setPhoneNumber(normalizedPhone)
                             .setTimeout(60L, TimeUnit.SECONDS)
                             .setActivity(currentActivity)
                             .setCallbacks(callbacks)
