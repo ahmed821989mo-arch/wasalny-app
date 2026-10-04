@@ -1,0 +1,57 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function hasAdminPermission(permission) {
+      let adminPath = /databases/(default)/documents/admins/$(request.auth.uid);
+      return signedIn()
+        && firestore.exists(adminPath)
+        && firestore.get(adminPath).data.active == true
+        && (
+          firestore.get(adminPath).data.role == 'admin'
+          || (
+            firestore.get(adminPath).data.role == 'supervisor'
+            && firestore.get(adminPath).data.permissions is list
+            && firestore.get(adminPath).data.permissions.hasAny([permission])
+          )
+        );
+    }
+
+    match /subscriptionProofs/{driverId}/{requestId} {
+      allow create: if signedIn()
+        && request.auth.uid == driverId
+        && request.resource.size > 0
+        && request.resource.size <= 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)');
+      allow get: if signedIn() && (request.auth.uid == driverId || hasAdminPermission('subscriptions'));
+      allow delete: if signedIn()
+        && request.auth.uid == driverId
+        && !firestore.exists(/databases/(default)/documents/subscriptionRequests/$(requestId));
+      allow list, update: if false;
+    }
+
+    match /driverApplications/{driverId}/{imageType} {
+      function canUploadApplicationImage() {
+        let driverPath = /databases/(default)/documents/drivers/$(driverId);
+        return signedIn()
+          && request.auth.uid == driverId
+          && (!firestore.exists(driverPath) || firestore.get(driverPath).data.approved == false);
+      }
+
+      allow create, update: if canUploadApplicationImage()
+        && imageType in ['id-card', 'license', 'vehicle', 'profile']
+        && request.resource.size > 0
+        && request.resource.size <= 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)');
+      allow get: if signedIn() && (request.auth.uid == driverId || hasAdminPermission('drivers'));
+      allow delete: if signedIn()
+        && request.auth.uid == driverId
+        && imageType in ['id-card', 'license', 'vehicle', 'profile']
+        && !firestore.exists(/databases/(default)/documents/drivers/$(driverId));
+      allow list: if false;
+    }
+  }
+}

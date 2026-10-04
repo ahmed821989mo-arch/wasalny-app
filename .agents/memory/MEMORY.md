@@ -1,0 +1,1 @@
+- [Android and Firebase toolchains](android-firebase-toolchains.md) — Gradle builds use Java 17; Firebase emulator tests need Java 21+ and a matching emulator/test project ID.

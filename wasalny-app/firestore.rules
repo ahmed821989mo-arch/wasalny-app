@@ -1,0 +1,436 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function validCoordinates(lat, lon) {
+      return lat is number && lat >= -90 && lat <= 90
+        && lon is number && lon >= -180 && lon <= 180;
+    }
+
+    function ownsRide(rideId) {
+      return signedIn()
+        && get(/databases/$(database)/documents/rides/$(rideId)).data.customerId == request.auth.uid;
+    }
+
+    function approvedDriver(uid) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/drivers/$(uid))
+        && get(/databases/$(database)/documents/drivers/$(uid)).data.approved == true;
+    }
+
+    function subscribedDriver(uid) {
+      let driverPath = /databases/$(database)/documents/drivers/$(uid);
+      return approvedDriver(uid)
+        && (
+          (get(driverPath).data.subscriptionExpiresAt is timestamp
+            && get(driverPath).data.subscriptionExpiresAt > request.time)
+          || (get(driverPath).data.subscriptionExpiresAt is int
+            && get(driverPath).data.subscriptionExpiresAt > request.time.toMillis())
+        );
+    }
+
+    function hasRideRequest(uid, rideId) {
+      return exists(/databases/$(database)/documents/drivers/$(uid)/requests/$(rideId));
+    }
+
+    function isRootAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'admin'
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.active == true;
+    }
+
+    function hasAdminPermission(permission) {
+      let adminPath = /databases/$(database)/documents/admins/$(request.auth.uid);
+      return signedIn()
+        && exists(adminPath)
+        && get(adminPath).data.active == true
+        && (
+          get(adminPath).data.role == 'admin'
+          || (
+            get(adminPath).data.role == 'supervisor'
+            && get(adminPath).data.permissions is list
+            && get(adminPath).data.permissions.hasAny([permission])
+          )
+        );
+    }
+
+    function validPermissions(permissions) {
+      return permissions is list
+        && permissions.size() >= 1
+        && permissions.size() <= 6
+        && permissions.toSet().difference(
+          ['drivers', 'subscriptions', 'rides', 'ratings', 'passengers', 'pricing'].toSet()
+        ).size() == 0;
+    }
+
+    function notBanned(uid) {
+      let userPath = /databases/$(database)/documents/users/$(uid);
+      return !exists(userPath)
+        || !get(userPath).data.keys().hasAny(['banUntil'])
+        || (get(userPath).data.banUntil is timestamp
+          && get(userPath).data.banUntil <= request.time)
+        || (get(userPath).data.banUntil is int
+          && get(userPath).data.banUntil <= request.time.toMillis());
+    }
+
+    match /admins/{adminId} {
+      allow get: if signedIn() && (request.auth.uid == adminId || isRootAdmin());
+      allow list: if isRootAdmin();
+      allow create: if signedIn()
+        && request.auth.uid == adminId
+        && request.resource.data.keys().hasOnly(['phone', 'role', 'active', 'permissions', 'createdAt', 'updatedAt'])
+        && request.resource.data.role == 'supervisor'
+        && request.resource.data.active == true
+        && request.resource.data.phone == request.auth.token.phone_number
+        && exists(/databases/$(database)/documents/adminInvites/$(request.auth.token.phone_number))
+        && get(/databases/$(database)/documents/adminInvites/$(request.auth.token.phone_number)).data.active == true
+        && get(/databases/$(database)/documents/adminInvites/$(request.auth.token.phone_number)).data.phone == request.resource.data.phone
+        && request.resource.data.permissions == get(/databases/$(database)/documents/adminInvites/$(request.auth.token.phone_number)).data.permissions
+        && validPermissions(request.resource.data.permissions)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update: if isRootAdmin()
+        && resource.data.role == 'supervisor'
+        && request.resource.data.role == 'supervisor'
+        && request.resource.data.phone == resource.data.phone
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active', 'permissions', 'updatedAt'])
+        && request.resource.data.active is bool
+        && validPermissions(request.resource.data.permissions)
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /adminInvites/{phone} {
+      allow get: if signedIn() && request.auth.token.phone_number == phone;
+      allow list: if isRootAdmin();
+      allow create, update: if isRootAdmin()
+        && request.resource.data.keys().hasOnly(['phone', 'permissions', 'active', 'createdBy', 'createdAt', 'updatedAt'])
+        && request.resource.data.phone == phone
+        && validPermissions(request.resource.data.permissions)
+        && request.resource.data.active == true
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if isRootAdmin()
+        || (
+          signedIn()
+          && request.auth.token.phone_number == phone
+          && resource.data.phone == phone
+          && getAfter(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'supervisor'
+          && getAfter(/databases/$(database)/documents/admins/$(request.auth.uid)).data.phone == phone
+        );
+    }
+
+    match /users/{userId} {
+      allow get: if signedIn() && (
+        request.auth.uid == userId || hasAdminPermission('passengers')
+      );
+      allow list: if hasAdminPermission('passengers');
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly(['uid', 'role', 'name', 'phone', 'fcmToken', 'updatedAt', 'profileImageBase64'])
+        && request.resource.data.uid == userId
+        && request.resource.data.role in ['customer', 'driver']
+        && request.resource.data.name is string
+        && request.resource.data.phone is string
+        && (!request.resource.data.keys().hasAny(['profileImageBase64'])
+          || (request.resource.data.profileImageBase64 is string && request.resource.data.profileImageBase64.size() <= 200000))
+        && (!request.resource.data.keys().hasAny(['fcmToken']) || request.resource.data.fcmToken is string)
+        && request.resource.data.updatedAt == request.time;
+      allow update: if signedIn()
+        && (
+          (
+            request.auth.uid == userId
+            && request.resource.data.keys().hasOnly(['uid', 'role', 'name', 'phone', 'fcmToken', 'updatedAt', 'banUntil', 'profileImageBase64'])
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'name', 'phone', 'fcmToken', 'updatedAt', 'profileImageBase64'])
+            && request.resource.data.uid == userId
+            && request.resource.data.role in ['customer', 'driver']
+            && request.resource.data.name is string
+            && request.resource.data.phone is string
+            && (!request.resource.data.keys().hasAny(['profileImageBase64'])
+              || (request.resource.data.profileImageBase64 is string && request.resource.data.profileImageBase64.size() <= 200000))
+            && (!request.resource.data.keys().hasAny(['fcmToken']) || request.resource.data.fcmToken is string)
+            && request.resource.data.updatedAt == request.time
+          )
+          || (
+            hasAdminPermission('passengers')
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['banUntil', 'updatedAt'])
+            && (!request.resource.data.keys().hasAny(['banUntil'])
+              || (request.resource.data.banUntil is timestamp && request.resource.data.banUntil > request.time))
+            && request.resource.data.updatedAt == request.time
+          )
+        );
+      allow delete: if false;
+
+      match /cancels/{day} {
+        allow get: if signedIn() && request.auth.uid == userId;
+        allow list, create, update, delete: if false;
+      }
+    }
+
+    match /drivers/{driverId} {
+      allow get: if signedIn() && (
+        request.auth.uid == driverId || hasAdminPermission('drivers')
+      );
+      allow list: if hasAdminPermission('drivers');
+
+      // Driver applications are created only by the server after validating inline image data.
+      allow create: if false;
+
+      allow update: if signedIn()
+        && (
+          // Approved driver can update only operational/location fields.
+          (
+            request.auth.uid == driverId
+            && resource.data.approved == true
+            && request.resource.data.approved == resource.data.approved
+            && request.resource.data.uid == resource.data.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'displayName', 'available', 'lat', 'lon', 'geohash', 'updatedAt'
+            ])
+            && request.resource.data.available is bool
+            && request.resource.data.available == false
+            && validCoordinates(request.resource.data.lat, request.resource.data.lon)
+            && request.resource.data.geohash is string
+            && request.resource.data.updatedAt == request.time
+          )
+          ||
+          // Admin can approve/revoke, but cannot leave an unapproved driver online.
+          (
+            hasAdminPermission('drivers')
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'approved', 'status', 'available', 'updatedAt', 'needsMoreData', 'adminMessage'
+            ])
+            && request.resource.data.approved is bool
+            && ((request.resource.data.approved == true && request.resource.data.status == 'approved')
+              || (request.resource.data.approved == false && request.resource.data.status == 'pending'))
+            && request.resource.data.available == false
+            && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['needsMoreData'])
+              || request.resource.data.needsMoreData is bool)
+            && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['adminMessage'])
+              || request.resource.data.adminMessage is string)
+            && request.resource.data.updatedAt == request.time
+          )
+        );
+
+      match /requests/{rideId} {
+        allow get, list: if signedIn() && request.auth.uid == driverId;
+
+        allow create: if false; // الطلبات تُنشأ فقط عبر Cloud Function (Admin SDK)
+
+        allow update: if false;
+      }
+    }
+
+    match /rides/{rideId} {
+      allow create: if signedIn()
+        && request.resource.data.customerId == request.auth.uid
+        && notBanned(request.auth.uid)
+        && request.resource.data.status in ['searching', 'scheduled']
+        && request.resource.data.customerName is string
+        && request.resource.data.fromAddress is string
+        && request.resource.data.toAddress is string
+        && validCoordinates(request.resource.data.fromLat, request.resource.data.fromLon)
+        && validCoordinates(request.resource.data.toLat, request.resource.data.toLon)
+        && request.resource.data.distanceKm is number
+        && request.resource.data.distanceKm > 0
+        && request.resource.data.distanceKm <= 50
+        && request.resource.data.femaleMode is bool
+        && request.resource.data.withLuggage is bool
+        && request.resource.data.searchRadiusMeters == 500
+        && request.resource.data.searchStage == 0
+        && request.resource.data.invitedDriverIds is list
+        && request.resource.data.invitedDriverIds.size() == 0
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.keys().hasAll([
+          'customerId', 'customerName', 'fromAddress', 'toAddress', 'fromLat', 'fromLon',
+          'toLat', 'toLon', 'distanceKm', 'femaleMode', 'withLuggage', 'bookingType', 'status',
+          'searchRadiusMeters', 'searchStage', 'invitedDriverIds', 'scheduledAt', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'customerId', 'customerName', 'fromAddress', 'toAddress', 'fromLat', 'fromLon',
+          'toLat', 'toLon', 'distanceKm', 'femaleMode', 'withLuggage', 'bookingType', 'status',
+          'searchRadiusMeters', 'searchStage', 'invitedDriverIds', 'scheduledAt', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.bookingType in ['now', 'school']
+        && ((request.resource.data.bookingType == 'now' && request.resource.data.status == 'searching' && request.resource.data.scheduledAt == null) || (request.resource.data.bookingType == 'school' && request.resource.data.status == 'scheduled' && request.resource.data.scheduledAt is timestamp));
+
+      allow get: if signedIn() && (
+        resource.data.customerId == request.auth.uid
+        || (subscribedDriver(request.auth.uid)
+          && resource.data.status == 'searching'
+          && hasRideRequest(request.auth.uid, rideId))
+        || (resource.data.status in ['accepted', 'driver_arriving', 'driver_arrived', 'in_progress']
+          && resource.data.selectedDriverId == request.auth.uid)
+      );
+
+      allow list: if signedIn() && (
+        hasAdminPermission('rides')
+        || resource.data.customerId == request.auth.uid
+        || resource.data.selectedDriverId == request.auth.uid
+      );
+
+      allow update: if signedIn()
+        && (
+          (
+            resource.data.selectedDriverId == request.auth.uid
+            && resource.data.status in ['accepted', 'driver_arriving', 'driver_arrived', 'in_progress']
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+            && request.resource.data.updatedAt == request.time
+            && (
+              (resource.data.status == 'accepted' && request.resource.data.status == 'driver_arriving')
+              || (resource.data.status == 'driver_arriving' && request.resource.data.status == 'driver_arrived')
+              || (resource.data.status == 'driver_arrived' && request.resource.data.status == 'in_progress')
+              || (resource.data.status == 'in_progress' && request.resource.data.status in ['completed', 'cancelled'])
+              || (resource.data.status in ['accepted', 'driver_arriving', 'driver_arrived'] && request.resource.data.status == 'cancelled')
+            )
+          )
+        );
+
+      match /ratings/{raterId} {
+        allow get: if signedIn() && (
+          ownsRide(rideId) ||
+          get(/databases/$(database)/documents/rides/$(rideId)).data.selectedDriverId == request.auth.uid ||
+          hasAdminPermission('ratings')
+        );
+        allow create: if signedIn()
+          && request.auth.uid == raterId
+          && get(/databases/$(database)/documents/rides/$(rideId)).data.status == 'completed'
+          && (
+            get(/databases/$(database)/documents/rides/$(rideId)).data.customerId == request.auth.uid
+            || get(/databases/$(database)/documents/rides/$(rideId)).data.selectedDriverId == request.auth.uid
+          )
+          && request.resource.data.keys().hasOnly(['raterId', 'stars', 'comment', 'createdAt'])
+          && request.resource.data.raterId == request.auth.uid
+          && request.resource.data.stars is int
+          && request.resource.data.stars >= 1
+          && request.resource.data.stars <= 5
+          && request.resource.data.comment is string
+          && request.resource.data.comment.size() <= 300
+          && request.resource.data.createdAt == request.time;
+        allow list: if hasAdminPermission('ratings');
+        allow update, delete: if false;
+      }
+
+      match /private/{privateId} {
+        allow create: if signedIn() && (
+          (
+            ownsRide(rideId)
+            && privateId == 'contact'
+            && request.resource.data.keys().hasOnly(['customerPhone'])
+            && request.resource.data.customerPhone is string
+          )
+          || (
+            privateId == 'contact'
+            && getAfter(/databases/$(database)/documents/rides/$(rideId)).data.customerId == request.auth.uid
+            && request.resource.data.keys().hasOnly(['customerPhone'])
+            && request.resource.data.customerPhone is string
+          )
+          || (
+            privateId == 'driverLocation'
+            && get(/databases/$(database)/documents/rides/$(rideId)).data.selectedDriverId == request.auth.uid
+            && get(/databases/$(database)/documents/rides/$(rideId)).data.status in ['accepted', 'driver_arriving', 'driver_arrived', 'in_progress']
+            && request.resource.data.keys().hasOnly(['lat', 'lon', 'updatedAt'])
+            && validCoordinates(request.resource.data.lat, request.resource.data.lon)
+            && request.resource.data.updatedAt == request.time
+          )
+        );
+        allow get: if signedIn() && (
+          (
+            privateId == 'contact'
+            && (ownsRide(rideId)
+              || (get(/databases/$(database)/documents/rides/$(rideId)).data.status in ['accepted', 'driver_arriving', 'driver_arrived', 'in_progress']
+                && get(/databases/$(database)/documents/rides/$(rideId)).data.selectedDriverId == request.auth.uid))
+          )
+          || (
+            privateId == 'driverLocation'
+            && get(/databases/$(database)/documents/rides/$(rideId)).data.status in ['accepted', 'driver_arriving', 'driver_arrived', 'in_progress']
+            && (get(/databases/$(database)/documents/rides/$(rideId)).data.customerId == request.auth.uid
+              || get(/databases/$(database)/documents/rides/$(rideId)).data.selectedDriverId == request.auth.uid)
+          )
+        );
+        allow update: if signedIn()
+          && privateId == 'driverLocation'
+          && get(/databases/$(database)/documents/rides/$(rideId)).data.selectedDriverId == request.auth.uid
+          && get(/databases/$(database)/documents/rides/$(rideId)).data.status in ['accepted', 'driver_arriving', 'driver_arrived', 'in_progress']
+          && request.resource.data.keys().hasOnly(['lat', 'lon', 'updatedAt'])
+          && validCoordinates(request.resource.data.lat, request.resource.data.lon)
+          && request.resource.data.updatedAt == request.time;
+        allow list, delete: if false;
+      }
+
+      match /offers/{driverId} {
+        allow get, list: if signedIn() && (
+          ownsRide(rideId) || request.auth.uid == driverId
+        );
+
+        allow create: if signedIn()
+          && request.auth.uid == driverId
+          && subscribedDriver(driverId)
+          && hasRideRequest(driverId, rideId)
+          && get(/databases/$(database)/documents/rides/$(rideId)).data.status == 'searching'
+          && request.resource.data.driverId == driverId
+          && request.resource.data.price is int
+          && request.resource.data.price >= 1
+          && request.resource.data.price <= 100000
+          && request.resource.data.etaMinutes is int
+          && request.resource.data.etaMinutes >= 1
+          && request.resource.data.etaMinutes <= 240
+          && request.resource.data.status == 'pending'
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.keys().hasOnly([
+            'driverId', 'driverName', 'price', 'etaMinutes', 'status', 'createdAt'
+          ]);
+
+        allow update: if ownsRide(rideId)
+          && getAfter(/databases/$(database)/documents/rides/$(rideId)).data.status == 'accepted'
+          && getAfter(/databases/$(database)/documents/rides/$(rideId)).data.selectedOfferId == driverId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+          && request.resource.data.status == 'selected';
+
+        allow delete: if false;
+      }
+    }
+
+    match /subscriptionRequests/{requestId} {
+      allow get: if signedIn() && (
+        hasAdminPermission('subscriptions') || resource.data.driverId == request.auth.uid
+      );
+      allow list: if signedIn() && (
+        hasAdminPermission('subscriptions') || resource.data.driverId == request.auth.uid
+      );
+      allow create, update, delete: if false;
+    }
+
+    match /fareZones/{zoneId} {
+      allow get, list: if signedIn();
+      allow create, update: if hasAdminPermission('pricing')
+        && request.resource.data.keys().hasOnly([
+          'name', 'centerLat', 'centerLon', 'radiusKm', 'baseFare', 'perKmFare', 'minimumFare', 'active', 'updatedAt'
+        ])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 2
+        && request.resource.data.name.size() <= 60
+        && validCoordinates(request.resource.data.centerLat, request.resource.data.centerLon)
+        && request.resource.data.radiusKm is number
+        && request.resource.data.radiusKm >= 0.1
+        && request.resource.data.radiusKm <= 100
+        && request.resource.data.baseFare is number
+        && request.resource.data.baseFare >= 0
+        && request.resource.data.baseFare <= 100000
+        && request.resource.data.perKmFare is number
+        && request.resource.data.perKmFare >= 0
+        && request.resource.data.perKmFare <= 100000
+        && request.resource.data.minimumFare is number
+        && request.resource.data.minimumFare >= 1
+        && request.resource.data.minimumFare <= 100000
+        && request.resource.data.active is bool
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if hasAdminPermission('pricing');
+    }
+  }
+}
