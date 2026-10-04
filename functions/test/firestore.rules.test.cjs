@@ -151,6 +151,59 @@ test("drivers cannot set themselves available with direct writes", async () => {
   }));
 });
 
+test("drivers can submit one offer for active invitations only", async () => {
+  const invitations = [["ride-1", "searching"], ["ride-legacy", "pending"]];
+  await testEnvironment.withSecurityRulesDisabled(async context => {
+    const db = context.firestore();
+    await updateDoc(doc(db, "drivers/driver-1"), {
+      approved: true,
+      subscriptionExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
+    });
+    for (const [rideId, status] of invitations) {
+      if (rideId !== "ride-1") {
+        await setDoc(doc(db, "rides", rideId), rideData("passenger-1"));
+      }
+      await setDoc(doc(db, "drivers/driver-1/requests", rideId), { status });
+    }
+  });
+
+  const db = testEnvironment.authenticatedContext("driver-1").firestore();
+  for (const [rideId] of invitations) {
+    const offer = doc(db, "rides", rideId, "offers", "driver-1");
+    const data = {
+      driverId: "driver-1",
+      driverName: "سائق",
+      price: 50,
+      etaMinutes: 10,
+      status: "pending",
+      createdAt: serverTimestamp()
+    };
+    await assertSucceeds(setDoc(offer, data));
+    if (rideId === "ride-1") await assertFails(setDoc(offer, data));
+  }
+});
+
+test("drivers cannot submit offers for closed invitations", async () => {
+  await testEnvironment.withSecurityRulesDisabled(async context => {
+    const db = context.firestore();
+    await updateDoc(doc(db, "drivers/driver-1"), {
+      approved: true,
+      subscriptionExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
+    });
+    await setDoc(doc(db, "drivers/driver-1/requests", "ride-1"), { status: "closed" });
+  });
+
+  const db = testEnvironment.authenticatedContext("driver-1").firestore();
+  await assertFails(setDoc(doc(db, "rides/ride-1/offers/driver-1"), {
+    driverId: "driver-1",
+    driverName: "سائق",
+    price: 50,
+    etaMinutes: 10,
+    status: "pending",
+    createdAt: serverTimestamp()
+  }));
+});
+
 test("clients cannot accept offers by writing ride state directly", async () => {
   const db = testEnvironment.authenticatedContext("passenger-1").firestore();
   await assertFails(updateDoc(doc(db, "rides/ride-1"), {

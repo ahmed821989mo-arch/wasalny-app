@@ -33,7 +33,9 @@ service cloud.firestore {
     }
 
     function hasRideRequest(uid, rideId) {
-      return exists(/databases/$(database)/documents/drivers/$(uid)/requests/$(rideId));
+      let requestPath = /databases/$(database)/documents/drivers/$(uid)/requests/$(rideId);
+      return exists(requestPath)
+        && get(requestPath).data.status in ['searching', 'pending'];
     }
 
     function isAdmin() {

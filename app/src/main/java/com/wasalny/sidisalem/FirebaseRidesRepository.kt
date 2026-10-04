@@ -386,14 +386,19 @@ class FirebaseRidesRepository(
     }
 
     suspend fun submitOffer(rideId: String, uid: String, driverName: String, price: Int, etaMinutes: Int) {
+        require(FirebaseAuth.getInstance().currentUser?.uid == uid) { "غير مصرح" }
         require(price in 1..100_000) { "اكتب سعراً صحيحاً" }
         require(etaMinutes in 1..240) { "اكتب وقت وصول من دقيقة إلى 240 دقيقة" }
         val rideRef = rides.document(rideId)
+        val requestRef = drivers.document(uid).collection("requests").document(rideId)
         val offerRef = rideRef.collection("offers").document(uid)
         db.runTransaction { transaction ->
             val ride = transaction.get(rideRef)
-            check(ride.getString("status") == "searching") { "انتهى استقبال عروض الرحلة" }
-            check(transaction.get(offerRef).exists().not()) { "أرسلت عرضاً لهذه الرحلة بالفعل" }
+            val driverRequest = transaction.get(requestRef)
+            val existingOffer = transaction.get(offerRef)
+            check(ride.exists() && ride.getString("status") == "searching") { "انتهى استقبال عروض الرحلة" }
+            check(driverRequest.getString("status") in listOf("searching", "pending")) { "انتهت صلاحية دعوة الرحلة" }
+            check(!existingOffer.exists()) { "أرسلت عرضاً لهذه الرحلة بالفعل" }
             transaction.set(offerRef, mapOf(
                 "driverId" to uid, "driverName" to driverName, "price" to price,
                 "etaMinutes" to etaMinutes, "status" to "pending", "createdAt" to FieldValue.serverTimestamp()
@@ -401,7 +406,6 @@ class FirebaseRidesRepository(
             null
         }.await()
     }
-
     suspend fun selectOffer(rideId: String, customerId: String, driverId: String) {
         check(FirebaseAuth.getInstance().currentUser?.uid == customerId) { "غير مصرح" }
         functions.getHttpsCallable("selectRideOffer").call(
